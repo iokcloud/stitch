@@ -2,7 +2,11 @@
 
 本机运行的开源桌面 AI 智能体。连你自己的模型密钥，在电脑上干活——读文件、改代码、跑命令、操作桌面，干完活把流程沉淀成可复用的 Skill。
 
-![demo](docs/demo.gif)
+![welcome](docs/screenshots/01-welcome.png)
+
+![chat](docs/screenshots/02-chat.png)
+
+![library](docs/screenshots/03-library.png)
 
 ## 为什么用 Stitch
 
