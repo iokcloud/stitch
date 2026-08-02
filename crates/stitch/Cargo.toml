@@ -44,7 +44,7 @@ dialoguer = "0.11"
 eventsource-stream = "0.2"
 
 # Configuration
-toml = "0.8"
+toml = "1.1"
 directories = "5"
 chrono = { workspace = true }
 
