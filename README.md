@@ -26,6 +26,13 @@
 
 首次安装若 Windows 提示「无法识别」，点「更多信息」→「仍要运行」继续即可。可在下载后核对上方校验和。
 
+其他平台（测试版 · 未签名）：
+
+- macOS：[Apple 芯片](https://github.com/iokcloud/stitch/releases/latest/download/Stitch_0.1.7_aarch64.dmg) / [Intel](https://github.com/iokcloud/stitch/releases/latest/download/Stitch_0.1.7_x64.dmg)，或 `brew tap iokcloud/stitch && brew install stitch`
+- Linux：[deb](https://github.com/iokcloud/stitch/releases/latest/download/stitch_0.1.7_amd64.deb) / [AppImage](https://github.com/iokcloud/stitch/releases/latest/download/Stitch_0.1.7_amd64.AppImage)（x64）
+
+macOS 首次打开若被拦截，右键图标 →「打开」一次即可；AppImage 先 `chmod +x` 再运行。
+
 ### 方式二：一键构建（无安装包体验）
 
 PowerShell 执行：
