@@ -58,7 +58,7 @@ regex = "1"
 tokio-tungstenite = { version = "0.24", features = ["connect"] }
 
 # Standard MCP protocol client (stdio + Streamable HTTP)
-rmcp = { version = "2.2.0", default-features = false, features = [
+rmcp = { version = "3.0.1", default-features = false, features = [
     "client",
     "transport-child-process",
     "transport-streamable-http-client-reqwest",
