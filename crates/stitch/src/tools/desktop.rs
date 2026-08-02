@@ -610,14 +610,6 @@ impl DesktopWindowList {
             let t0 = std::time::Instant::now();
             window_list_windows().map(|r| r.with_duration_ms(t0))
         }
-        #[cfg(not(windows))]
-        {
-            Ok(ToolResult {
-                metrics: None,
-                success: false,
-                output: "desktop_window_list is only supported on Windows".into(),
-            })
-        }
         #[cfg(target_os = "linux")]
         {
             window_list_linux()
@@ -1086,15 +1078,15 @@ impl DesktopKey {
     }
 
     pub async fn execute(&self, arguments: serde_json::Value) -> anyhow::Result<ToolResult> {
+        let keys: Vec<String> = arguments["keys"]
+            .as_array()
+            .ok_or_else(|| anyhow::anyhow!("Missing 'keys' array"))?
+            .iter()
+            .filter_map(|v| v.as_str().map(|s| s.to_lowercase()))
+            .collect();
+
         #[cfg(windows)]
         {
-            let keys: Vec<String> = arguments["keys"]
-                .as_array()
-                .ok_or_else(|| anyhow::anyhow!("Missing 'keys' array"))?
-                .iter()
-                .filter_map(|v| v.as_str().map(|s| s.to_lowercase()))
-                .collect();
-
             if keys.is_empty() {
                 return Ok(ToolResult {
                     metrics: None,
@@ -1525,6 +1517,7 @@ fn send_mouse_wheel(amount: i32) -> anyhow::Result<ToolResult> {
 #[cfg(windows)]
 /// A single recognized word with its bounding box in screen coordinates.
 #[derive(Debug, Clone)]
+#[cfg(windows)]
 struct OcrWord {
     text: String,
     x: u32,
@@ -1534,6 +1527,7 @@ struct OcrWord {
 }
 
 /// Structured OCR result: full text + per-word bounding boxes.
+#[cfg(windows)]
 struct OcrOutput {
     full_text: String,
     words: Vec<OcrWord>,
