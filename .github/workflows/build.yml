@@ -51,6 +51,12 @@ jobs:
         working-directory: crates/stitch-desktop/frontend
         run: npm ci
 
+      # beforeBuildCommand 在 CI 的 cwd 语义不可靠（Windows 无 sh / Linux 找不到脚本），
+      # 这里显式构建 UI + touch build.rs 强制重嵌，再以 --config 覆盖 beforeBuildCommand 为空。
+      - name: build frontend UI
+        working-directory: crates/stitch-desktop
+        run: bash scripts/build-ui.sh
+
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -59,7 +65,7 @@ jobs:
           # TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           projectPath: crates/stitch-desktop
-          args: ${{ matrix.args }}
+          args: '${{ matrix.args }} --config {"build":{"beforeBuildCommand":""}}'
 
       # 手动触发（workflow_dispatch）时 tauri-action 不传 Release，显式保留产物供检查；
       # tag 触发时 tauri-action 会直接把资产传进 Release。
