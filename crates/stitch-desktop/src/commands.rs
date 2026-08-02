@@ -3597,7 +3597,7 @@ mod compact_animation_tests {
     fn lively_morph_overshoots_position_then_settles_exact() {
         let steps =
             compact_animation_steps((0.0, 0.0, 1120.0, 740.0), (400.0, 500.0, 420.0, 64.0), true);
-        assert_eq!(steps.len(), 6);
+        assert_eq!(steps.len(), 12); // STEPS 常量
         let positions: Vec<f64> = steps.iter().map(|s| s.x).collect();
         // 回弹：中间某步越过目标（>400），最终精确落回。
         let max_pos = positions.iter().cloned().fold(0.0f64, f64::max);
@@ -3615,7 +3615,7 @@ mod compact_animation_tests {
     #[test]
     fn steps_noop_when_from_equals_to() {
         let steps = compact_animation_steps((1.0, 2.0, 3.0, 4.0), (1.0, 2.0, 3.0, 4.0), true);
-        assert_eq!(steps.len(), 6);
+        assert_eq!(steps.len(), 12); // STEPS 常量
         for s in &steps {
             assert_eq!((s.x, s.y, s.width, s.height), (1.0, 2.0, 3.0, 4.0));
         }
