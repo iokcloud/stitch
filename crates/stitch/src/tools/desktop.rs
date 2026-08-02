@@ -1145,7 +1145,7 @@ fn key_macos(keys: &[String]) -> anyhow::Result<ToolResult> {
             "ctrl" | "cmd" | "alt" | "shift" | "option" | "control" | "command"
         )
     });
-    let base_joined = base.join("");
+    let base_joined: String = base.iter().map(|s| s.as_str()).collect();
     if mods.is_empty() {
         let script = format!(
             "tell application \"System Events\" to keystroke \"{}\"",
