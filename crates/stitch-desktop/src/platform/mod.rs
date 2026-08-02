@@ -15,6 +15,7 @@ mod single_instance;
 pub use single_instance::try_acquire;
 
 #[cfg(not(target_os = "windows"))]
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))] // 非 Windows stub（调用点在 Windows 分支）
 pub fn try_acquire() -> bool {
     true
 }
@@ -25,6 +26,7 @@ mod titlebar;
 pub use titlebar::set_theme;
 
 #[cfg(not(target_os = "windows"))]
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 pub fn set_theme(_app: &AppHandle, _dark: bool) {}
 
 #[cfg(target_os = "windows")]
@@ -33,10 +35,13 @@ mod taskbar;
 pub use taskbar::{clear, start_animation};
 
 #[cfg(not(target_os = "windows"))]
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 pub fn set_progress(_hwnd: isize, _state: i32) {}
 #[cfg(not(target_os = "windows"))]
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 pub fn start_animation(_hwnd: isize) {}
 #[cfg(not(target_os = "windows"))]
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 pub fn clear(_app: &AppHandle) {}
 
 /// Hide the native splash overlay and reveal the main window.
