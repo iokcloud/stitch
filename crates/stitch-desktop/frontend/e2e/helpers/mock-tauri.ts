@@ -1103,6 +1103,11 @@ export async function mockTauri(page: Page, opts: MockTauriOptions = {}) {
                   scope: "user",
                 },
               ];
+            case "export_skill":
+              return {
+                path: "D:\\backup\\demo-local",
+                files: 3,
+              };
             case "create_prompt": {
               if (!config.api_token_set) {
                 throw new Error("请先在设置中填写 PromptStdio API Token");
@@ -1312,6 +1317,8 @@ export async function mockTauri(page: Page, opts: MockTauriOptions = {}) {
               if (typeof args?.eventId === "number") {
                 agentListeners.delete(args.eventId as number);
               }
+              return null;
+            case "snap_compact_window":
               return null;
             case "set_compact_mode":
               return null;

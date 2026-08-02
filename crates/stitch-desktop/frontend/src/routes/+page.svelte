@@ -75,6 +75,7 @@
     trackUsage,
     cancelGeneration,
     saveWindowState,
+    snapCompactWindow,
   } from "$lib/ipc";
   import { applyDoneUsage, applyUsageEvent } from "$lib/stores/usage";
 
@@ -117,6 +118,8 @@
   // Window geometry persistence: debounce persist on resize / move / close.
   let maximizedState = false;
   let persistTimer: ReturnType<typeof setTimeout> | null = null;
+
+  let snapTimer: ReturnType<typeof setTimeout> | null = null;
 
   function schedulePersistWindowState(immediate = false) {
     if (persistTimer) clearTimeout(persistTimer);
@@ -161,7 +164,17 @@
           })
           .catch(() => {});
       });
-      unlistenMove = await win.onMoved(() => schedulePersistWindowState());
+      unlistenMove = await win.onMoved(() => {
+        schedulePersistWindowState();
+        // 浮条拖拽停止后自动吸附屏幕边缘（防抖 400ms）
+        if (compact.mode) {
+          if (snapTimer) clearTimeout(snapTimer);
+          snapTimer = setTimeout(() => {
+            snapTimer = null;
+            void snapCompactWindow().catch(() => {});
+          }, 400);
+        }
+      });
       unlistenClose = await win.onCloseRequested(() =>
         schedulePersistWindowState(true),
       );
@@ -645,7 +658,7 @@
       }
       if (meta && e.shiftKey && key === "c") {
         e.preventDefault();
-        void compact.toggle();
+        void compact.toggleWithMorph();
         return;
       }
       if (e.key === "Escape") {
@@ -678,6 +691,13 @@
 </script>
 
 <div class="app-frame" data-testid="app-frame">
+  <div id="compact-morph-logo" class="compact-morph-logo" aria-hidden="true">
+    <svg width="56" height="56" viewBox="0 0 32 32" fill="none">
+      <rect width="32" height="32" rx="7" fill="var(--color-brand-primary)" />
+      <path d="M8 11h16M8 16h10M8 21h13" stroke="#fff" stroke-width="2.2" stroke-linecap="round" />
+      <path d="M22 20l5 3.5-5 3.5" stroke="var(--color-brand-accent)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" fill="none" />
+    </svg>
+  </div>
   <div class="compact-bar" data-testid="compact-bar">
     <div class="compact-drag" data-tauri-drag-region>
       {#if compact.finished}
@@ -705,9 +725,6 @@
       {/if}
       <span class="compact-text" data-tauri-drag-region>
         <span class="compact-label" data-testid="compact-tool">{compactLabel()}</span>
-        <span class="compact-elapsed" data-testid="compact-elapsed"
-          >{formatElapsed(compact.elapsedMs / 1000)}</span
-        >
       </span>
     </div>
     {#if compact.tool || $isStreaming}

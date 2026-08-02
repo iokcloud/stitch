@@ -9,6 +9,7 @@
   } from "../stores/app";
   import { nav } from "../nav.svelte";
   import { refocusComposerSoon } from "../stores/palette";
+  import { pushToast } from "../stores/toasts";
   import * as ipc from "../ipc";
   import type { LocalSkillRow } from "../ipc";
   import type { McpServerSnapshot } from "../types";
@@ -108,6 +109,16 @@
       document.removeEventListener("keydown", onKey);
     };
   });
+
+  async function exportSkillTo(slug: string, title: string) {
+    try {
+      const r = await ipc.exportSkill(slug);
+      pushToast(`已导出 ${title}（${r.files} 个文件）到 ${r.path}`);
+    } catch (e) {
+      const msg = typeof e === "string" ? e : "导出失败";
+      pushToast(msg, "error");
+    }
+  }
 
   function useSkill(sk: LocalSkillRow) {
     if ($isStreaming) return;
@@ -238,21 +249,34 @@
             >去场景安装</button>
           {:else}
             {#each filteredSkills as sk (sk.rel_path)}
-              <button
-                type="button"
-                class="attach-skill"
-                data-testid={`capability-skill-${sk.slug}`}
-                data-scope={sk.scope}
-                onclick={() => useSkill(sk)}
-              >
-                <span class="attach-skill-head">
-                  <span class="attach-skill-title">{sk.title}</span>
-                  <span class="attach-skill-scope">{scopeLabel(sk.scope)}</span>
-                </span>
-                {#if sk.description}
-                  <span class="attach-skill-desc">{sk.description}</span>
-                {/if}
-              </button>
+              <div class="attach-skill" data-testid={`capability-skill-${sk.slug}`} data-scope={sk.scope}>
+                <button
+                  type="button"
+                  class="attach-skill-main"
+                  onclick={() => useSkill(sk)}
+                >
+                  <span class="attach-skill-head">
+                    <span class="attach-skill-title">{sk.title}</span>
+                    <span class="attach-skill-scope">{scopeLabel(sk.scope)}</span>
+                  </span>
+                  {#if sk.description}
+                    <span class="attach-skill-desc">{sk.description}</span>
+                  {/if}
+                </button>
+                <button
+                  type="button"
+                  class="attach-skill-export"
+                  title="导出 Skill（复制到所选位置）"
+                  aria-label={`导出 ${sk.title}`}
+                  data-testid={`capability-skill-export-${sk.slug}`}
+                  onclick={() => exportSkillTo(sk.slug, sk.title)}
+                >
+                  <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                    <path d="M8 3v7M5 7l3 3 3-3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
+                    <path d="M3 12.5h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
+                  </svg>
+                </button>
+              </div>
             {/each}
           {/if}
         </div>

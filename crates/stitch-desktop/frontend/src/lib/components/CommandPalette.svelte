@@ -127,7 +127,7 @@
         title: compact.mode ? "退出紧凑模式" : "进入紧凑模式",
         hint: "Ctrl+Shift+C",
         keywords: ["compact", "jinzou", "futiao", "浮条", "紧凑"],
-        run: () => void compact.toggle(),
+        run: () => void compact.toggleWithMorph(),
       },
       {
         id: "act-terminal",

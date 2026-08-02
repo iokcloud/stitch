@@ -143,6 +143,16 @@ export async function listLocalSkills(): Promise<LocalSkillRow[]> {
     return invoke("list_local_skills");
 }
 
+export type ExportSkillResult = {
+    path: string;
+    files: number;
+};
+
+/** 导出 Skill 到用户选择的位置（资产主权：可随时带走自己的 Skill）。 */
+export async function exportSkill(slug: string): Promise<ExportSkillResult> {
+    return invoke("export_skill", { slug });
+}
+
 export type TestPromptstdioOverrides = {
     profile_id?: string;
     api_token?: string;
@@ -409,4 +419,9 @@ export async function saveWindowState(maximized: boolean): Promise<void> {
 
 export function listenAgentEvents(handler: (event: AgentEvent) => void): Promise<UnlistenFn> {
     return listen<AgentEvent>("agent-event", (e) => handler(e.payload));
+}
+
+/** 浮条拖拽停止后吸附屏幕边缘（仅 compact 模式由前端调用）。 */
+export async function snapCompactWindow(): Promise<void> {
+    return invoke("snap_compact_window");
 }

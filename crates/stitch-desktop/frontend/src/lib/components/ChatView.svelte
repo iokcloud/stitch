@@ -64,6 +64,7 @@
   import { PROVIDER_PRESETS, modelSupportsVision, type LlmProfileSnapshot } from "../types";
   import { formatElapsed } from "../output-format";
   import { usage, contextPct, formatTokenCount, resetTurnUsage } from "../stores/usage";
+  import { compact } from "../stores/compact.svelte";
   import * as ipc from "../ipc";
   import { RECOMMENDED_SCENES } from "../scenes";
   import { WORKDIR_NUDGE_KEY } from "../types";
@@ -1345,6 +1346,20 @@
           {/if}
         </div>
 
+        <button
+          type="button"
+          class="icon-btn"
+          class:is-active={compact.mode}
+          data-testid="topbar-compact-toggle"
+          aria-label={compact.mode ? "退出紧凑模式" : "紧凑模式"}
+          aria-pressed={compact.mode}
+          title={compact.mode ? "退出紧凑模式" : "紧凑模式"}
+          onclick={() => void compact.toggleWithMorph()}
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true">
+            <path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5" />
+          </svg>
+        </button>
         <button
         type="button"
         class="icon-btn"

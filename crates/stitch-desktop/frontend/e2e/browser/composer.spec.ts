@@ -223,4 +223,18 @@ test.describe("Composer & workdir chrome", () => {
     await expect(page.getByTestId("settings-tab-mcp")).toHaveClass(/settings-nav-item-active/);
     await assertUiHygiene(page);
   });
+
+  test("attach menu: export skill writes toast with path and file count", async ({ page }) => {
+    await mockTauri(page, { apiKeySet: true });
+    await page.goto("/");
+    await expect(page.getByTestId("chat-input")).toBeVisible({ timeout: 15_000 });
+    await page.getByTestId("attach-menu-trigger").click();
+    await page.getByTestId("attach-open-skills").click();
+    await expect(page.getByTestId("capability-skill-export-demo-local")).toBeVisible();
+    await page.getByTestId("capability-skill-export-demo-local").click();
+    await expect(page.getByTestId("toast-stack")).toContainText(
+      /已导出 本机 Demo Skill（3 个文件）到 D:\\backup\\demo-local/,
+    );
+    await assertUiHygiene(page);
+  });
 });

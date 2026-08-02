@@ -30,16 +30,16 @@ test.describe("compact automation overlay", () => {
       await page.evaluate(() => document.documentElement.getAttribute("data-compact")),
     ).toBe("true");
 
-    // Execution state: Chinese tool label + live stopwatch ticking.
+    // Execution state: Chinese tool label + breathing glow (no stopwatch).
     await expect(page.getByTestId("compact-tool")).toContainText("正在执行 截图", {
       timeout: 5_000,
     });
-    const elapsed = page.getByTestId("compact-elapsed");
-    await expect(elapsed).toBeVisible();
-    const t1 = await elapsed.textContent();
-    await page.waitForTimeout(1100);
-    const t2 = await elapsed.textContent();
-    expect(t1).not.toBe(t2);
+    // 呼吸光晕：浮条带 glow 动画（animation-name 含 compact-glow 即呼吸在跑）
+    await expect
+      .poll(async () =>
+        page.locator(".compact-bar").evaluate((el) => getComputedStyle(el).animationName),
+      )
+      .toContain("compact-glow");
 
     // Drag region present on the label area (parkable anywhere).
     expect(
@@ -103,7 +103,6 @@ test.describe("compact automation overlay", () => {
       timeout: 12_000,
     });
     await expect(page.getByTestId("compact-done")).toBeVisible();
-    await expect(page.getByTestId("compact-elapsed")).toBeVisible();
     await expect(page.getByTestId("compact-bar")).toBeHidden({ timeout: 6_000 });
     expect(
       await page.evaluate(() => document.documentElement.getAttribute("data-compact")),
@@ -167,6 +166,24 @@ test.describe("compact automation overlay", () => {
 
     // In compact mode the app UI (incl. palette) is hidden — exit via hotkey.
     await page.keyboard.press("Control+Shift+KeyC");
+    await expect(page.getByTestId("compact-bar")).toBeHidden({ timeout: 5_000 });
+  });
+
+  test("topbar button toggles compact mode (logo morph)", async ({ page }) => {
+    await mockTauri(page, { apiKeySet: true, apiTokenSet: true });
+    await page.goto("/");
+    await expect(page.getByTestId("chat-view")).toBeVisible({ timeout: 15_000 });
+
+    // 顶栏按钮进入 compact（logo 变幻动画 260ms 后切换）
+    await page.getByTestId("topbar-compact-toggle").click();
+    await expect(page.getByTestId("compact-bar")).toBeVisible({ timeout: 5_000 });
+    await expect(page.locator("html")).toHaveAttribute("data-compact", "true");
+
+    // 按钮高亮（紧凑模式激活态）
+    await expect(page.getByTestId("topbar-compact-toggle")).toHaveClass(/is-active/);
+
+    // 再点退出
+    await page.getByTestId("topbar-compact-toggle").click();
     await expect(page.getByTestId("compact-bar")).toBeHidden({ timeout: 5_000 });
   });
 });

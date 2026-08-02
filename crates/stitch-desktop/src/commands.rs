@@ -1480,6 +1480,76 @@ pub fn list_local_skills(
     ))
 }
 
+#[derive(serde::Serialize)]
+pub struct ExportSkillResult {
+    /// 导出后的完整路径（如 `D:\backup\my-skill`）。
+    pub path: String,
+    /// 复制的文件数。
+    pub files: usize,
+}
+
+fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<usize> {
+    std::fs::create_dir_all(dst)?;
+    let mut count = 0;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let ty = entry.file_type()?;
+        let target = dst.join(entry.file_name());
+        if ty.is_dir() {
+            count += copy_dir_recursive(&entry.path(), &target)?;
+        } else {
+            std::fs::copy(entry.path(), &target)?;
+            count += 1;
+        }
+    }
+    Ok(count)
+}
+
+/// 导出 Skill 到用户选择的位置（资产主权：用户可随时带走自己的 Skill）。
+#[tauri::command]
+pub fn export_skill(
+    slug: String,
+    work_dir_state: tauri::State<'_, WorkDirState>,
+) -> Result<ExportSkillResult, String> {
+    let wd = work_dir_state
+        .path
+        .lock()
+        .map_err(|e| e.to_string())?
+        .clone();
+    let wd = wd.trim();
+    let home = user_home_dir();
+
+    // 与 list_local_skills 相同的四个候选位置，取第一个存在的目录。
+    let mut candidates: Vec<std::path::PathBuf> = Vec::new();
+    if !wd.is_empty() {
+        let base = std::path::PathBuf::from(wd);
+        candidates.push(base.join(".agents").join("skills").join(&slug));
+        candidates.push(base.join(".cursor").join("skills").join(&slug));
+    }
+    if let Some(h) = home.as_deref() {
+        candidates.push(h.join(".agents").join("skills").join(&slug));
+        candidates.push(h.join(".cursor").join("skills").join(&slug));
+    }
+    let src = candidates
+        .into_iter()
+        .find(|p| p.is_dir())
+        .ok_or_else(|| format!("未找到 Skill：{slug}"))?;
+
+    let dir = rfd::FileDialog::new()
+        .set_title("选择导出位置")
+        .pick_folder()
+        .ok_or_else(|| "已取消".to_string())?;
+    let dest = dir.join(&slug);
+    if dest.exists() {
+        return Err(format!("目标位置已存在同名目录：{}", dest.display()));
+    }
+    let files = copy_dir_recursive(&src, &dest).map_err(|e| format!("导出失败：{e}"))?;
+    Ok(ExportSkillResult {
+        path: dest.display().to_string(),
+        files,
+    })
+}
+
 /// Short L1 errors for settings UI (avoid dumping raw JSON to users).
 fn friendly_llm_test_error(status: u16, body: &str) -> String {
     let lower = body.to_ascii_lowercase();
@@ -3294,14 +3364,16 @@ const COMPACT_W: f64 = 420.0;
 const COMPACT_H: f64 = 64.0;
 const COMPACT_MARGIN: f64 = 16.0;
 
+#[allow(dead_code)] // 保留：窗口层变形动画参考实现（切换已改瞬间+前端过渡）
 fn ease_out_cubic(t: f64) -> f64 {
     1.0 - (1.0 - t).powi(3)
 }
 
 /// Ease-out-back: overshoots the target slightly, then settles back — the
 /// lively「精灵落位」bounce for the morph's position.
+#[allow(dead_code)] // 保留：窗口层变形动画参考实现（切换已改瞬间+前端过渡）
 fn ease_out_back(t: f64) -> f64 {
-    const C1: f64 = 1.2;
+    const C1: f64 = 0.6;
     const C3: f64 = C1 + 1.0;
     let u = t - 1.0;
     1.0 + C3 * u * u * u + C1 * u * u
@@ -3311,12 +3383,13 @@ fn ease_out_back(t: f64) -> f64 {
 /// Size always eases out monotonically; position bounces (`lively`) on the
 /// enter morph and eases out plainly on restore.
 /// Pure — unit-tested separately from the window calls.
+#[allow(dead_code)] // 保留：窗口层变形动画参考实现（切换已改瞬间+前端过渡）
 fn compact_animation_steps(
     from: (f64, f64, f64, f64),
     to: (f64, f64, f64, f64),
     lively: bool,
 ) -> Vec<CompactStep> {
-    const STEPS: usize = 6;
+    const STEPS: usize = 12;
     (1..=STEPS)
         .map(|i| {
             let t = i as f64 / STEPS as f64;
@@ -3338,6 +3411,7 @@ fn compact_animation_steps(
 
 /// Morph duration: production default 600ms; set STITCH_COMPACT_ANIM_MS to
 /// stretch it for visual observation (clamped 200ms–8s).
+#[allow(dead_code)] // 保留：窗口层变形动画参考实现（切换已改瞬间+前端过渡）
 fn compact_anim_duration_ms() -> u64 {
     std::env::var("STITCH_COMPACT_ANIM_MS")
         .ok()
@@ -3346,6 +3420,7 @@ fn compact_anim_duration_ms() -> u64 {
         .unwrap_or(600)
 }
 
+#[allow(dead_code)] // 保留：窗口层变形动画参考实现（切换已改瞬间+前端过渡）
 fn compact_anim_step_sleep() -> std::time::Duration {
     std::time::Duration::from_millis((compact_anim_duration_ms() / 6).max(1))
 }
@@ -3395,26 +3470,24 @@ pub fn set_compact_mode(app: tauri::AppHandle, compact: bool) -> Result<(), Stri
         window.set_always_on_top(true).map_err(|e| e.to_string())?;
         window.set_resizable(false).map_err(|e| e.to_string())?;
         window.set_skip_taskbar(true).map_err(|e| e.to_string())?;
+        // 去掉系统标题栏——420×64 的浮条不该被装饰吃掉；透明窗口下前端圆角即浮条外形。
+        let _ = window.set_decorations(false);
         // 最大化窗口先还原，否则 Windows 上 set_size 不生效。
         let _ = window.unmaximize();
 
-        let from = capture_window_geometry(&window, false).unwrap_or_default();
+        // 一次切换到位（不再逐步 resize——窗口层步进在 Windows 上跳变/闪烁；
+        // 转换观感由前端过渡动画承担，GPU 合成更流畅稳定）
         let (tx, ty) = compact_target_corner(&app).unwrap_or((0.0, 0.0));
-        let steps = compact_animation_steps(
-            (
-                from.x.unwrap_or(0) as f64,
-                from.y.unwrap_or(0) as f64,
-                from.width as f64,
-                from.height as f64,
-            ),
-            (tx, ty, COMPACT_W, COMPACT_H),
-            true, // lively: bounce into the corner, then settle
+        apply_compact_step(
+            &window,
+            &CompactStep {
+                x: tx,
+                y: ty,
+                width: COMPACT_W,
+                height: COMPACT_H,
+            },
         );
-        for step in &steps {
-            apply_compact_step(&window, step);
-            std::thread::sleep(compact_anim_step_sleep());
-        }
-        tracing::info!("Compact mode enabled (420x64 overlay, animated)");
+        tracing::info!("Compact mode enabled (420x64 overlay, instant)");
     } else {
         let pre = COMPACT_PRE_GEOMETRY
             .lock()
@@ -3423,37 +3496,15 @@ pub fn set_compact_mode(app: tauri::AppHandle, compact: bool) -> Result<(), Stri
         window.set_always_on_top(false).map_err(|e| e.to_string())?;
         window.set_resizable(true).map_err(|e| e.to_string())?;
         window.set_skip_taskbar(false).map_err(|e| e.to_string())?;
+        let _ = window.set_decorations(true);
         match pre {
             Some(snap) if snap.maximized => {
                 let _ = window.set_size(tauri::LogicalSize::new(1120.0, 740.0));
                 let _ = window.maximize();
             }
             Some(snap) => {
-                // 反向动画：从浮条当前几何（可能被拖过）放大回用户几何。
-                if !snap.maximized && snap.width > 0 && snap.height > 0 {
-                    let from = capture_window_geometry(&window, false).unwrap_or_default();
-                    let steps = compact_animation_steps(
-                        (
-                            from.x.unwrap_or(0) as f64,
-                            from.y.unwrap_or(0) as f64,
-                            from.width as f64,
-                            from.height as f64,
-                        ),
-                        (
-                            snap.x.unwrap_or(0) as f64,
-                            snap.y.unwrap_or(0) as f64,
-                            snap.width as f64,
-                            snap.height as f64,
-                        ),
-                        false, // restore eases out plainly — no bounce
-                    );
-                    for step in &steps {
-                        apply_compact_step(&window, step);
-                        std::thread::sleep(compact_anim_step_sleep());
-                    }
-                } else {
-                    apply_window_geometry(&window, &snap);
-                }
+                // 一次还原到位（与进入对称——转换动画由前端过渡承担）
+                apply_window_geometry(&window, &snap);
             }
             None => {
                 window
@@ -3488,6 +3539,32 @@ mod llm_test_error_tests {
             "模型连接失败（HTTP 500）"
         );
     }
+}
+
+/// 浮条拖拽停止后吸附屏幕边缘（仅 compact 模式由前端调用）。
+/// 水平贴最近侧（左/右，margin 8px），垂直保持用户拖拽位置。
+#[tauri::command]
+pub fn snap_compact_window(app: tauri::AppHandle) -> Result<(), String> {
+    let window = app
+        .get_webview_window("main")
+        .ok_or("main window not found")?;
+    let pos = window.outer_position().map_err(|e| e.to_string())?;
+    let size = window.outer_size().map_err(|e| e.to_string())?;
+    let Some(mon) = window.current_monitor().map_err(|e| e.to_string())? else {
+        return Ok(());
+    };
+    let mb = mon.size();
+    let mx = mon.position().x;
+    let center = pos.x as f64 + size.width as f64 / 2.0;
+    let m_center = mx as f64 + mb.width as f64 / 2.0;
+    const MARGIN: f64 = 8.0;
+    let target_x = if center < m_center {
+        mx as f64 + MARGIN
+    } else {
+        mx as f64 + mb.width as f64 - size.width as f64 - MARGIN
+    };
+    let _ = window.set_position(tauri::PhysicalPosition::new(target_x as i32, pos.y));
+    Ok(())
 }
 
 #[cfg(test)]

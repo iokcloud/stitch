@@ -619,6 +619,118 @@ impl DesktopWindowList {
                 output: "desktop_window_list is only supported on Windows".into(),
             })
         }
+        #[cfg(target_os = "linux")]
+        {
+            window_list_linux()
+        }
+        #[cfg(target_os = "macos")]
+        {
+            window_list_macos()
+        }
+        #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
+        {
+            Ok(ToolResult {
+                metrics: None,
+                success: false,
+                output: "desktop_window_list is only supported on Windows/macOS/Linux".into(),
+            })
+        }
+    }
+}
+
+/// Linux 窗口列表：xdotool search + getwindowname。
+#[cfg(target_os = "linux")]
+fn window_list_linux() -> anyhow::Result<ToolResult> {
+    use std::process::Command;
+    let out = Command::new("xdotool")
+        .args(["search", "--onlyvisible", "--name", ""])
+        .output();
+    let ids = match out {
+        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).to_string(),
+        Ok(_) => {
+            return Ok(ToolResult {
+                metrics: None,
+                success: false,
+                output: "窗口列表失败".into(),
+            });
+        }
+        Err(e) => {
+            return Ok(ToolResult {
+                metrics: None,
+                success: false,
+                output: format!("窗口列表失败：{e}（需安装 xdotool）"),
+            });
+        }
+    };
+    let mut rows: Vec<String> = Vec::new();
+    for line in ids.lines() {
+        let id = line.trim();
+        if id.is_empty() {
+            continue;
+        }
+        let name = Command::new("xdotool").args(["getwindowname", id]).output();
+        let title = match name {
+            Ok(o) => String::from_utf8_lossy(&o.stdout).trim().to_string(),
+            _ => String::new(),
+        };
+        rows.push(format!("{id}	{title}"));
+    }
+    Ok(ToolResult {
+        metrics: None,
+        success: true,
+        output: format!(
+            "Windows ({}):
+{}",
+            rows.len(),
+            rows.join(
+                "
+"
+            )
+        ),
+    })
+}
+
+/// macOS 窗口列表：System Events 前台应用（macOS 无全局窗口标题枚举——简化版）。
+#[cfg(target_os = "macos")]
+fn window_list_macos() -> anyhow::Result<ToolResult> {
+    use std::process::Command;
+    let script = "tell application \"System Events\" to get name of every process whose background only is false";
+    let out = Command::new("osascript").arg("-e").arg(script).output();
+    match out {
+        Ok(o) if o.status.success() => {
+            let text = String::from_utf8_lossy(&o.stdout).to_string();
+            let apps: Vec<&str> = text
+                .split(", ")
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+                .collect();
+            Ok(ToolResult {
+                metrics: None,
+                success: true,
+                output: format!(
+                    "Frontmost apps ({}):
+{}",
+                    apps.len(),
+                    apps.join(
+                        "
+"
+                    )
+                ),
+            })
+        }
+        Ok(o) => Ok(ToolResult {
+            metrics: None,
+            success: false,
+            output: format!(
+                "窗口列表失败：{}（需辅助功能权限）",
+                String::from_utf8_lossy(&o.stderr)
+            ),
+        }),
+        Err(e) => Ok(ToolResult {
+            metrics: None,
+            success: false,
+            output: format!("窗口列表失败：{e}"),
+        }),
     }
 }
 
@@ -679,7 +791,125 @@ impl DesktopWindowAction {
                 output: "desktop_window_action is only supported on Windows".into(),
             })
         }
+        #[cfg(target_os = "linux")]
+        {
+            let title = arguments["title"]
+                .as_str()
+                .ok_or_else(|| anyhow::anyhow!("Missing 'title' argument"))?;
+            let action = arguments["action"]
+                .as_str()
+                .ok_or_else(|| anyhow::anyhow!("Missing 'action' argument"))?;
+            window_action_linux(title, action)
+        }
+        #[cfg(target_os = "macos")]
+        {
+            let title = arguments["title"]
+                .as_str()
+                .ok_or_else(|| anyhow::anyhow!("Missing 'title' argument"))?;
+            let action = arguments["action"]
+                .as_str()
+                .ok_or_else(|| anyhow::anyhow!("Missing 'action' argument"))?;
+            let _ = (title, action);
+            Ok(ToolResult {
+                metrics: None,
+                success: false,
+                output: "desktop_window_action is not supported on macOS yet".into(),
+            })
+        }
+        #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
+        {
+            Ok(ToolResult {
+                metrics: None,
+                success: false,
+                output: "desktop_window_action is only supported on Windows/macOS/Linux".into(),
+            })
+        }
     }
+}
+
+/// Linux 窗口操作：xdotool search --name 匹配全部 → 操作（close/minimize/maximize/focus）。
+#[cfg(target_os = "linux")]
+fn window_action_linux(title_part: &str, action: &str) -> anyhow::Result<ToolResult> {
+    use std::process::Command;
+    let out = Command::new("xdotool")
+        .args(["search", "--onlyvisible", "--name", title_part])
+        .output();
+    let ids = match out {
+        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).to_string(),
+        Ok(_) => {
+            return Ok(ToolResult {
+                metrics: None,
+                success: false,
+                output: "窗口查找失败".into(),
+            });
+        }
+        Err(e) => {
+            return Ok(ToolResult {
+                metrics: None,
+                success: false,
+                output: format!("窗口查找失败：{e}（需安装 xdotool）"),
+            });
+        }
+    };
+    let id_list: Vec<&str> = ids
+        .lines()
+        .map(|l| l.trim())
+        .filter(|l| !l.is_empty())
+        .collect();
+    if id_list.is_empty() {
+        return Ok(ToolResult {
+            metrics: None,
+            success: false,
+            output: format!("No visible window with title containing '{title_part}'"),
+        });
+    }
+    let sub = match action {
+        "close" => "windowclose",
+        "minimize" => "windowminimize",
+        "maximize" => "windowmaximize",
+        "restore" | "focus" => "windowactivate",
+        _ => {
+            return Ok(ToolResult {
+                metrics: None,
+                success: false,
+                output: format!("Unknown action: {action}"),
+            });
+        }
+    };
+    let mut done = 0usize;
+    for id in &id_list {
+        let r = Command::new("xdotool").args([sub, id]).output();
+        if let Ok(o) = r {
+            if o.status.success() {
+                done += 1;
+            }
+        }
+    }
+    // close 自查：窗口是否真的关闭
+    if action == "close" {
+        std::thread::sleep(std::time::Duration::from_millis(350));
+        let check = Command::new("xdotool")
+            .args(["search", "--onlyvisible", "--name", title_part])
+            .output();
+        let remaining = match check {
+            Ok(o) => String::from_utf8_lossy(&o.stdout).lines().count(),
+            _ => 0,
+        };
+        if remaining > 0 {
+            return Ok(ToolResult {
+                metrics: None,
+                success: false,
+                output: format!(
+                    "Closed {done} window(s); {remaining} still open (可能被对话框拦截)"
+                ),
+            });
+        }
+    }
+    Ok(ToolResult {
+        metrics: None,
+        success: true,
+        output: format!("{action}: {done} window(s)"),
+    })
 }
 
 #[cfg(windows)]
@@ -1050,7 +1280,55 @@ impl DesktopScroll {
                 output: "desktop_scroll is only supported on Windows".into(),
             })
         }
+        #[cfg(target_os = "linux")]
+        {
+            let amount = arguments["amount"].as_i64().unwrap_or(1);
+            scroll_linux(amount)
+        }
+        #[cfg(target_os = "macos")]
+        {
+            let amount = arguments["amount"].as_i64().unwrap_or(1);
+            let _ = amount;
+            Ok(ToolResult {
+                metrics: None,
+                success: false,
+                output: "desktop_scroll is not supported on macOS yet".into(),
+            })
+        }
+        #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
+        {
+            Ok(ToolResult {
+                metrics: None,
+                success: false,
+                output: "desktop_scroll is only supported on Windows/macOS/Linux".into(),
+            })
+        }
     }
+}
+
+/// Linux 滚动：xdotool click 4（上）/ 5（下），amount 次。
+#[cfg(target_os = "linux")]
+fn scroll_linux(amount: i64) -> anyhow::Result<ToolResult> {
+    use std::process::Command;
+    let btn = if amount >= 0 { "5" } else { "4" };
+    let times = amount.abs().clamp(1, 50);
+    let mut ok = true;
+    for _ in 0..times {
+        let r = Command::new("xdotool").args(["click", btn]).output();
+        if !matches!(r, Ok(o) if o.status.success()) {
+            ok = false;
+            break;
+        }
+    }
+    Ok(ToolResult {
+        metrics: None,
+        success: ok,
+        output: if ok {
+            format!("Scrolled {times} step(s)")
+        } else {
+            "滚动失败（xdotool 不可用？）".into()
+        },
+    })
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -1262,6 +1540,7 @@ struct OcrOutput {
     words: Vec<OcrWord>,
 }
 
+#[cfg(windows)]
 fn ocr_from_bmp(path: &std::path::Path) -> anyhow::Result<OcrOutput> {
     use windows::Globalization::Language;
     use windows::Graphics::Imaging::BitmapDecoder;
@@ -1874,6 +2153,65 @@ impl DesktopHover {
                 output: "desktop_hover is only supported on Windows".into(),
             })
         }
+        #[cfg(target_os = "linux")]
+        {
+            let x = arguments["x"]
+                .as_i64()
+                .ok_or_else(|| anyhow::anyhow!("Missing 'x' argument"))?;
+            let y = arguments["y"]
+                .as_i64()
+                .ok_or_else(|| anyhow::anyhow!("Missing 'y' argument"))?;
+            hover_linux(x, y)
+        }
+        #[cfg(target_os = "macos")]
+        {
+            let x = arguments["x"]
+                .as_i64()
+                .ok_or_else(|| anyhow::anyhow!("Missing 'x' argument"))?;
+            let y = arguments["y"]
+                .as_i64()
+                .ok_or_else(|| anyhow::anyhow!("Missing 'y' argument"))?;
+            let _ = (x, y);
+            Ok(ToolResult {
+                metrics: None,
+                success: false,
+                output: "desktop_hover is not supported on macOS yet".into(),
+            })
+        }
+        #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
+        {
+            Ok(ToolResult {
+                metrics: None,
+                success: false,
+                output: "desktop_hover is only supported on Windows/macOS/Linux".into(),
+            })
+        }
+    }
+}
+
+/// Linux 悬停：xdotool mousemove。
+#[cfg(target_os = "linux")]
+fn hover_linux(x: i64, y: i64) -> anyhow::Result<ToolResult> {
+    use std::process::Command;
+    let out = Command::new("xdotool")
+        .args(["mousemove", &x.to_string(), &y.to_string()])
+        .output();
+    match out {
+        Ok(o) if o.status.success() => Ok(ToolResult {
+            metrics: None,
+            success: true,
+            output: format!("Moved cursor to ({x}, {y})"),
+        }),
+        Ok(_) => Ok(ToolResult {
+            metrics: None,
+            success: false,
+            output: "移动失败".into(),
+        }),
+        Err(e) => Ok(ToolResult {
+            metrics: None,
+            success: false,
+            output: format!("移动失败：{e}（需安装 xdotool）"),
+        }),
     }
 }
 
@@ -2471,6 +2809,84 @@ impl DesktopAppLaunch {
                 output: "desktop_app_launch is only supported on Windows".into(),
             })
         }
+        #[cfg(target_os = "linux")]
+        {
+            let app = arguments["app"]
+                .as_str()
+                .ok_or_else(|| anyhow::anyhow!("Missing 'app' argument"))?;
+            let args = arguments["args"]
+                .as_array()
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|v| v.as_str().map(|x| x.to_string()))
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            launch_app_linux(app, &args)
+        }
+        #[cfg(target_os = "macos")]
+        {
+            let app = arguments["app"]
+                .as_str()
+                .ok_or_else(|| anyhow::anyhow!("Missing 'app' argument"))?;
+            launch_app_macos(app)
+        }
+        #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
+        {
+            Ok(ToolResult {
+                metrics: None,
+                success: false,
+                output: "desktop_app_launch is only supported on Windows/macOS/Linux".into(),
+            })
+        }
+    }
+}
+
+/// Linux 启动应用：xdg-open（按默认应用打开）。
+#[cfg(target_os = "linux")]
+fn launch_app_linux(app: &str, _args: &[String]) -> anyhow::Result<ToolResult> {
+    use std::process::Command;
+    let out = Command::new("xdg-open").arg(app).output();
+    match out {
+        Ok(o) if o.status.success() => Ok(ToolResult {
+            metrics: None,
+            success: true,
+            output: format!("Launched {app}"),
+        }),
+        Ok(o) => Ok(ToolResult {
+            metrics: None,
+            success: false,
+            output: format!("启动失败：{}", String::from_utf8_lossy(&o.stderr)),
+        }),
+        Err(e) => Ok(ToolResult {
+            metrics: None,
+            success: false,
+            output: format!("启动失败：{e}（xdg-open 不可用）"),
+        }),
+    }
+}
+
+/// macOS 启动应用：open -a。
+#[cfg(target_os = "macos")]
+fn launch_app_macos(app: &str) -> anyhow::Result<ToolResult> {
+    use std::process::Command;
+    let out = Command::new("open").args(["-a", app]).output();
+    match out {
+        Ok(o) if o.status.success() => Ok(ToolResult {
+            metrics: None,
+            success: true,
+            output: format!("Launched {app}"),
+        }),
+        Ok(o) => Ok(ToolResult {
+            metrics: None,
+            success: false,
+            output: format!("启动失败：{}", String::from_utf8_lossy(&o.stderr)),
+        }),
+        Err(e) => Ok(ToolResult {
+            metrics: None,
+            success: false,
+            output: format!("启动失败：{e}"),
+        }),
     }
 }
 

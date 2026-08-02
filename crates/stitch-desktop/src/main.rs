@@ -189,6 +189,7 @@ fn main() {
             commands::test_promptstdio,
             commands::list_skills,
             commands::list_local_skills,
+            commands::export_skill,
             commands::set_titlebar_theme,
             commands::clear_taskbar_progress,
             commands::finish_startup,
@@ -197,6 +198,7 @@ fn main() {
             commands::frontend_log,
             commands::save_window_state,
             commands::set_compact_mode,
+            commands::snap_compact_window,
         ])
         .build(tauri::generate_context!())
         .expect("error while building Stitch desktop");
