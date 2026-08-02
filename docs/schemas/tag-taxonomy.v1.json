@@ -1,0 +1,242 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://promptstdio.com/schemas/tag-taxonomy.v1.json",
+  "title": "PromptStdio Tag Taxonomy",
+  "description": "Canonical tag keys (DB/MCP/API) with zh-CN/en labels and input aliases. Web UI resolves labels by locale.",
+  "version": "1.0",
+  "default_locale": "zh-CN",
+  "supported_locales": ["zh-CN", "en"],
+  "max_count": 5,
+  "tags": {
+    "general": {
+      "labels": { "zh-CN": "通用", "en": "General" },
+      "aliases": ["general", "通用"],
+      "harvest": true
+    },
+    "daily": {
+      "labels": { "zh-CN": "日常", "en": "Daily" },
+      "aliases": ["daily", "日常"],
+      "harvest": true
+    },
+    "workflow": {
+      "labels": { "zh-CN": "工作流", "en": "Workflow" },
+      "aliases": ["workflow", "工作流", "流程"],
+      "harvest": true
+    },
+    "meta": {
+      "labels": { "zh-CN": "元规范", "en": "Meta" },
+      "aliases": ["meta", "元规范", "元提示"],
+      "harvest": true
+    },
+    "documentation": {
+      "labels": { "zh-CN": "文档", "en": "Documentation" },
+      "aliases": ["documentation", "文档", "docs"],
+      "harvest": true
+    },
+    "studio": {
+      "labels": { "zh-CN": "Studio", "en": "Studio" },
+      "aliases": ["studio", "Studio"],
+      "harvest": true
+    },
+    "ide-skill": {
+      "labels": { "zh-CN": "IDE 技能", "en": "IDE Skill" },
+      "aliases": ["ide-skill", "IDE技能", "IDE 技能", "skill"],
+      "harvest": false
+    },
+    "backend": {
+      "labels": { "zh-CN": "后端", "en": "Backend" },
+      "aliases": ["backend", "后端"],
+      "harvest": true
+    },
+    "frontend": {
+      "labels": { "zh-CN": "前端", "en": "Frontend" },
+      "aliases": ["frontend", "前端"],
+      "harvest": true
+    },
+    "getting-started": {
+      "labels": { "zh-CN": "入门", "en": "Getting Started" },
+      "aliases": ["getting-started", "入门"],
+      "harvest": true
+    },
+    "ai-collaboration": {
+      "labels": { "zh-CN": "AI协作", "en": "AI Collaboration" },
+      "aliases": ["ai-collaboration", "AI协作", "ai协作"],
+      "harvest": true
+    },
+    "prompt-engineering": {
+      "labels": { "zh-CN": "提示词工程", "en": "Prompt Engineering" },
+      "aliases": ["prompt-engineering", "提示词工程"],
+      "harvest": true
+    },
+    "productivity": {
+      "labels": { "zh-CN": "效率", "en": "Productivity" },
+      "aliases": ["productivity", "效率"],
+      "harvest": true
+    },
+    "decision": {
+      "labels": { "zh-CN": "决策", "en": "Decision" },
+      "aliases": ["decision", "决策"],
+      "harvest": true
+    },
+    "knowledge-base": {
+      "labels": { "zh-CN": "知识库", "en": "Knowledge Base" },
+      "aliases": ["knowledge-base", "知识库"],
+      "harvest": false
+    },
+    "quality": {
+      "labels": { "zh-CN": "质量", "en": "Quality" },
+      "aliases": ["quality", "质量"],
+      "harvest": false
+    },
+    "team": {
+      "labels": { "zh-CN": "团队", "en": "Team" },
+      "aliases": ["team", "团队"],
+      "harvest": true
+    },
+    "architecture": {
+      "labels": { "zh-CN": "架构", "en": "Architecture" },
+      "aliases": ["architecture", "架构"],
+      "harvest": false
+    },
+    "onboarding": {
+      "labels": { "zh-CN": "上手引导", "en": "Onboarding" },
+      "aliases": ["onboarding", "上手引导"],
+      "harvest": true
+    },
+    "collaboration": {
+      "labels": { "zh-CN": "协作", "en": "Collaboration" },
+      "aliases": ["collaboration", "协作"],
+      "harvest": true
+    },
+    "long-term": {
+      "labels": { "zh-CN": "长期", "en": "Long Term" },
+      "aliases": ["long-term", "长期"],
+      "harvest": false
+    },
+    "feature-dev": {
+      "labels": { "zh-CN": "功能开发", "en": "Feature Development" },
+      "aliases": ["feature-dev", "功能开发"],
+      "harvest": true
+    },
+    "writing": {
+      "labels": { "zh-CN": "写作", "en": "Writing" },
+      "aliases": ["writing", "写作"],
+      "harvest": true
+    },
+    "editing": {
+      "labels": { "zh-CN": "编辑", "en": "Editing" },
+      "aliases": ["editing", "编辑"],
+      "harvest": false
+    },
+    "email": {
+      "labels": { "zh-CN": "邮件", "en": "Email" },
+      "aliases": ["email", "邮件"],
+      "harvest": false
+    },
+    "meeting": {
+      "labels": { "zh-CN": "会议", "en": "Meeting" },
+      "aliases": ["meeting", "会议"],
+      "harvest": false
+    },
+    "learning": {
+      "labels": { "zh-CN": "学习", "en": "Learning" },
+      "aliases": ["learning", "学习"],
+      "harvest": false
+    },
+    "learning-methods": {
+      "labels": { "zh-CN": "学习方法", "en": "Learning Methods" },
+      "aliases": ["learning-methods", "学习方法"],
+      "harvest": false
+    },
+    "health": {
+      "labels": { "zh-CN": "健康", "en": "Health" },
+      "aliases": ["health", "健康"],
+      "harvest": false
+    },
+    "habits": {
+      "labels": { "zh-CN": "习惯", "en": "Habits" },
+      "aliases": ["habits", "习惯"],
+      "harvest": false
+    },
+    "mvp": {
+      "labels": { "zh-CN": "MVP", "en": "MVP" },
+      "aliases": ["mvp", "MVP"],
+      "harvest": false
+    },
+    "suite": {
+      "labels": { "zh-CN": "套件", "en": "Suite" },
+      "aliases": ["suite", "套件"],
+      "harvest": false
+    },
+    "clarification": {
+      "labels": { "zh-CN": "澄清", "en": "Clarification" },
+      "aliases": ["clarification", "澄清"],
+      "harvest": false
+    },
+    "prompt-technique": {
+      "labels": { "zh-CN": "提示词技巧", "en": "Prompt Technique" },
+      "aliases": ["prompt-technique", "提示词技巧"],
+      "harvest": false
+    },
+    "de-ai": {
+      "labels": { "zh-CN": "去AI味", "en": "De-AI" },
+      "aliases": ["de-ai", "去AI味"],
+      "harvest": false
+    },
+    "polish": {
+      "labels": { "zh-CN": "润色", "en": "Polish" },
+      "aliases": ["polish", "润色"],
+      "harvest": false
+    },
+    "fluency": {
+      "labels": { "zh-CN": "流畅度", "en": "Fluency" },
+      "aliases": ["fluency", "流畅度"],
+      "harvest": false
+    },
+    "structure": {
+      "labels": { "zh-CN": "结构", "en": "Structure" },
+      "aliases": ["structure", "结构"],
+      "harvest": false
+    },
+    "clarity": {
+      "labels": { "zh-CN": "清晰", "en": "Clarity" },
+      "aliases": ["clarity", "清晰"],
+      "harvest": false
+    },
+    "fact-check": {
+      "labels": { "zh-CN": "事实核查", "en": "Fact Check" },
+      "aliases": ["fact-check", "事实核查"],
+      "harvest": false
+    },
+    "verification": {
+      "labels": { "zh-CN": "验证", "en": "Verification" },
+      "aliases": ["verification", "验证"],
+      "harvest": false
+    },
+    "natural-language": {
+      "labels": { "zh-CN": "自然语言", "en": "Natural Language" },
+      "aliases": ["natural-language", "自然语言"],
+      "harvest": false
+    },
+    "image": {
+      "labels": { "zh-CN": "图像", "en": "Image" },
+      "aliases": ["image", "图像"],
+      "harvest": false
+    },
+    "upscale": {
+      "labels": { "zh-CN": "放大", "en": "Upscale" },
+      "aliases": ["upscale", "放大"],
+      "harvest": false
+    },
+    "restoration": {
+      "labels": { "zh-CN": "修复", "en": "Restoration" },
+      "aliases": ["restoration", "修复"],
+      "harvest": false
+    },
+    "vibe-coding": {
+      "labels": { "zh-CN": "Vibe Coding", "en": "Vibe Coding" },
+      "aliases": ["vibe-coding", "Vibe Coding"],
+      "harvest": false
+    }
+  }
+}

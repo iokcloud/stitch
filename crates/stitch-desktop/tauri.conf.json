@@ -1,0 +1,62 @@
+{
+  "$schema": "https://raw.githubusercontent.com/nicorevin/tauri-docs/v2/references/config-schema.json",
+  "productName": "Stitch",
+  "version": "0.1.6",
+  "identifier": "com.promptstdio.stitch",
+  "build": {
+    "frontendDist": "./frontend/build",
+    "devUrl": "http://localhost:5173",
+    "beforeDevCommand": "npm --prefix frontend run dev",
+    "beforeBuildCommand": "sh scripts/build-ui.sh"
+  },
+  "bundle": {
+    "active": true,
+    "targets": [
+      "nsis"
+    ],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/icon.png",
+      "icons/icon.ico"
+    ],
+    "createUpdaterArtifacts": true,
+    "windows": {
+      "nsis": {
+        "installerIcon": "icons/icon.ico"
+      }
+    }
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Stitch — PromptStdio Agent",
+        "width": 1120,
+        "height": 740,
+        "minWidth": 960,
+        "minHeight": 640,
+        "resizable": true,
+        "fullscreen": false,
+        "center": true,
+        "visible": false,
+        "transparent": true,
+        "backgroundColor": "#1a2b4c",
+        "dragDropEnabled": false
+      }
+    ],
+    "security": {
+      "csp": "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' asset: https://asset.localhost data:; connect-src ipc: http://ipc.localhost; object-src 'none'; base-uri 'self'; form-action 'none'; frame-ancestors 'none'",
+      "capabilities": [
+        "default"
+      ]
+    }
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "https://www.promptstdio.com/downloads/stitch-update.json"
+      ],
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDVCNjU4MkZDREYzOUM1OEMKUldTTXhUbmYvSUpsVzAwRUxyR1JMaWNNZTR3Y0NONXJDY3FDOU1jTytYNzV0aElmZHFPVXJyZWoK"
+    }
+  }
+}

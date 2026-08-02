@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://promptstdio.com/schemas/prompt-feedback-request.v1.json",
+  "title": "PromptStdio Prompt Feedback Request",
+  "description": "POST /prompts/{id}/feedback 与 POST /api/v1/prompts/{id}/feedback 请求体",
+  "type": "object",
+  "required": ["rating"],
+  "properties": {
+    "rating": {
+      "type": "string",
+      "enum": ["up", "down"],
+      "description": "对整条提示词资产的使用效果评分"
+    },
+    "comment": {
+      "type": "string",
+      "maxLength": 500,
+      "description": "可选备注"
+    }
+  }
+}

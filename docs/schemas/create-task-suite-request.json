@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://promptstdio.com/schemas/create-task-suite-request.v1.json",
+  "title": "PromptStdio Create Task Suite Request",
+  "description": "MCP 工具 create_task_suite 输入参数。须在 IDE 对话中经用户确认后调用；创建提示词采集器套件。generate_suite 为本地工作流步骤。",
+  "type": "object",
+  "required": ["title", "steps"],
+  "properties": {
+    "title": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 255
+    },
+    "description": {
+      "type": ["string", "null"],
+      "maxLength": 2000
+    },
+    "tags": {
+      "type": "array",
+      "items": { "type": "string", "maxLength": 100 },
+      "maxItems": 10,
+      "description": "可选；省略时从步骤提示词 tags 并集推导"
+    },
+    "steps": {
+      "type": "array",
+      "minItems": 2,
+      "description": "MCP 调用时传 JSON 字符串；解析后至少 2 步",
+      "items": {
+        "type": "object",
+        "required": ["prompt_id"],
+        "properties": {
+          "position": { "type": "integer", "minimum": 1 },
+          "step_title": { "type": "string", "maxLength": 255 },
+          "prompt_type": { "type": "string", "enum": ["user", "system"], "default": "user" },
+          "prompt_id": { "type": "integer", "minimum": 1 }
+        }
+      }
+    }
+  }
+}

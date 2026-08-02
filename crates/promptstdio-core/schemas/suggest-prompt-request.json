@@ -1,0 +1,85 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://promptstdio.com/schemas/suggest-prompt-request.v1.json",
+  "title": "PromptStdio Suggest Prompt Request",
+  "description": "MCP 工具 suggest_prompt 输入参数。须在 IDE 对话中经用户确认（可修改）后调用；服务端仅做格式校验与入库，不分析对话内容。",
+  "type": "object",
+  "required": ["title", "content"],
+  "properties": {
+    "title": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 255
+    },
+    "content": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 5000,
+      "description": "提示词正文"
+    },
+    "description": {
+      "type": ["string", "null"],
+      "maxLength": 2000,
+      "description": "摘要或用途说明"
+    },
+    "tags": {
+      "type": "array",
+      "items": { "type": "string", "maxLength": 100 },
+      "maxItems": 10,
+      "description": "tags.mode=whitelist 时须为 get_harvest_rules.tags.allowed 子集"
+    },
+    "parameters": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name"],
+        "properties": {
+          "name": { "type": "string", "maxLength": 100 },
+          "description": { "type": "string" },
+          "default": { "type": "string" }
+        }
+      }
+    },
+    "harvest_source": {
+      "type": "string",
+      "enum": ["manual", "auto", "manual_web"],
+      "default": "manual",
+      "description": "manual=用户明说存起来；auto=自动识别后确认；manual_web=Web 剪贴板入库（ADR-014）"
+    },
+    "harvest_meta": {
+      "type": "object",
+      "description": "本地 generate_metadata 步骤产出，服务端原样存入 prompts.harvest_meta",
+      "properties": {
+        "summary": {
+          "type": "string",
+          "maxLength": 2000,
+          "description": "本地生成的简短摘要"
+        },
+        "structure_score": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "parameterization_score": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "security_score": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "quality_notes": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "低分项说明或优化建议（展示用，可选）"
+        }
+      }
+    },
+    "task_agent_id": {
+      "type": ["integer", "null"],
+      "description": "若由 run_agent 流程触发入库，关联任务智能体 ID"
+    }
+  }
+}

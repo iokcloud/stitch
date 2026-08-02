@@ -1,0 +1,22 @@
+[package]
+name = "promptstdio-core"
+version.workspace = true
+edition.workspace = true
+description = "Shared config, errors, constants"
+
+[features]
+default = ["server"]
+# 服务端 / CLI：tokio 限流、JSON Schema 校验、tracing 初始化
+server = ["dep:tokio", "dep:tracing-subscriber", "dep:jsonschema"]
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+sha2 = { workspace = true }
+hmac = { workspace = true }
+urlencoding = { workspace = true }
+tokio = { workspace = true, features = ["sync"], optional = true }
+tracing-subscriber = { workspace = true, optional = true }
+jsonschema = { workspace = true, optional = true }

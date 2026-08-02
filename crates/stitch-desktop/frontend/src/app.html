@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="zh-CN" class="h-full">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Stitch — PromptStdio Agent</title>
+    <!-- Splash: pure CSS, paints before JS/Svelte hydrate -->
+    <style>
+      html,
+      body {
+        height: 100%;
+        margin: 0;
+        background: #f4f6f8;
+      }
+      [data-theme="dark"] html,
+      [data-theme="dark"] body {
+        background: #0f172a;
+      }
+      /* Opaque full-window shell — required for WebView2 hit-testing when
+         the Tauri window is transparent (splash cross-fade). */
+      #app-root {
+        position: fixed;
+        inset: 0;
+        display: flex;
+        flex-direction: column;
+        background: #f4f6f8;
+        color: #0f172a;
+        overflow: hidden;
+      }
+      /* SvelteKit injects an inline <script> as a direct child of #app-root.
+         Under display:flex, WebView2 paints that script's source as visible
+         text at the top of the window. Keep scripts out of flex layout. */
+      #app-root > script {
+        display: none !important;
+      }
+      [data-theme="dark"] #app-root {
+        background: #0f172a;
+        color: #f1f5f9;
+      }
+      #app-loader {
+        position: fixed;
+        inset: 0;
+        background: #ffffff;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 9999;
+      }
+      .splash-title {
+        font-family: "Figtree", -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+          sans-serif;
+        font-size: 28px;
+        font-weight: 800;
+        color: #1a2b4c;
+        letter-spacing: -0.5px;
+        animation: splash-text-in 0.4s ease both;
+        animation-delay: 0.05s;
+      }
+      .splash-subtitle {
+        font-family: "Figtree", -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+          sans-serif;
+        font-size: 16px;
+        font-weight: 400;
+        color: rgba(26, 43, 76, 0.55);
+        letter-spacing: 0.5px;
+        animation: splash-text-in 0.4s ease both;
+        animation-delay: 0.15s;
+      }
+      .splash-progress {
+        width: 200px;
+        height: 2px;
+        background: rgba(26, 43, 76, 0.1);
+        border-radius: 1px;
+        overflow: hidden;
+        animation: splash-text-in 0.35s ease both;
+        animation-delay: 0.2s;
+      }
+      [data-theme="dark"] #app-loader {
+        background: #0f172a;
+      }
+      [data-theme="dark"] .splash-title {
+        color: #e2e8f0;
+      }
+      [data-theme="dark"] .splash-subtitle {
+        color: rgba(226, 232, 240, 0.7);
+      }
+      [data-theme="dark"] .splash-progress {
+        background: rgba(226, 232, 240, 0.15);
+      }
+      .splash-stage {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 24px;
+        animation: splash-stage-in 0.35s ease both;
+      }
+      .splash-brand {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 8px;
+      }
+      .splash-logo {
+        animation: splash-pulse 2s ease-in-out infinite;
+      }
+      .splash-progress-fill {
+        height: 100%;
+        background: #007bff;
+        border-radius: 1px;
+        width: 0%;
+        animation: splash-progress-fill 0.8s ease both;
+        animation-delay: 0.3s;
+      }
+      @keyframes splash-stage-in {
+        from {
+          opacity: 0;
+          transform: translateY(12px);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
+      }
+      @keyframes splash-text-in {
+        from {
+          opacity: 0;
+          transform: translateY(6px);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
+      }
+      @keyframes splash-pulse {
+        0%,
+        100% {
+          opacity: 0.85;
+          transform: scale(1);
+        }
+        50% {
+          opacity: 1;
+          transform: scale(1.04);
+        }
+      }
+      @keyframes splash-progress-fill {
+        from {
+          width: 0%;
+        }
+        to {
+          width: 100%;
+        }
+      }
+      #app-loader.fade-out {
+        opacity: 0;
+        transition: opacity 0.45s ease;
+        pointer-events: none !important;
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .splash-stage,
+        .splash-title,
+        .splash-subtitle,
+        .splash-progress,
+        .splash-progress-fill {
+          animation-duration: 0.01ms;
+        }
+      }
+    </style>
+    <script>
+      try {
+        var t = localStorage.getItem("stitch-theme") || "light";
+        document.documentElement.setAttribute("data-theme", t);
+      } catch (e) {}
+    </script>
+    <link rel="stylesheet" href="%sveltekit.assets%/fonts/figtree.css" />
+    %sveltekit.head%
+  </head>
+  <body class="h-full overflow-hidden">
+    <div id="app-loader" aria-hidden="true">
+      <div class="splash-stage">
+        <div class="splash-brand">
+          <svg
+            class="splash-logo"
+            width="64"
+            height="64"
+            viewBox="0 0 32 32"
+            fill="none"
+            aria-hidden="true"
+          >
+            <rect width="32" height="32" rx="6" fill="#1A2B4C" />
+            <path
+              d="M8 11h12M8 16h9M8 21h6"
+              stroke="#FFFFFF"
+              stroke-width="2"
+              stroke-linecap="round"
+            />
+            <path
+              d="M21 19l5 3-5 3"
+              fill="none"
+              stroke="#007BFF"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            />
+          </svg>
+          <div class="splash-title">PromptStdio</div>
+          <div class="splash-subtitle">Stitch</div>
+        </div>
+        <div class="splash-progress"><div class="splash-progress-fill"></div></div>
+      </div>
+    </div>
+    <div id="app-root">%sveltekit.body%</div>
+  </body>
+</html>

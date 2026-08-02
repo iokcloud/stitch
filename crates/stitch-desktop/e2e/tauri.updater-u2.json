@@ -1,0 +1,21 @@
+{
+  "app": {
+    "security": {
+      "capabilities": [
+        "default",
+        {
+          "identifier": "webdriver",
+          "description": "E2E-only embedded WDIO WebDriver ACL",
+          "windows": ["main"],
+          "permissions": ["wdio-webdriver:default"]
+        }
+      ]
+    }
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": ["http://127.0.0.1:18765/stitch-update.json"],
+      "dangerousInsecureTransportProtocol": true
+    }
+  }
+}

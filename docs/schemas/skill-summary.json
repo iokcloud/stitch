@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://promptstdio.com/schemas/skill-summary.v1.json",
+  "title": "PromptStdio Skill Summary",
+  "description": "MCP list_skills 返回的 skills[] 元素；Web Explore Skill 列表/详情同源。",
+  "type": "object",
+  "required": [
+    "slug",
+    "title",
+    "description",
+    "version",
+    "tag",
+    "install_phrase",
+    "sync_phrase"
+  ],
+  "properties": {
+    "slug": {
+      "type": "string",
+      "description": "与 packs/skills/{slug}/ 及 SKILL.md name 一致"
+    },
+    "title": { "type": "string", "description": "中文展示名" },
+    "description": {
+      "type": "string",
+      "description": "Web/列表用短描述（可与 SKILL.md description 语言不同）"
+    },
+    "version": {
+      "type": "string",
+      "description": "与 SKILL.md metadata.version 一致"
+    },
+    "tag": {
+      "type": "string",
+      "const": "ide-skill",
+      "description": "Explore 分类用 canonical tag（TAG_IDE_SKILL）"
+    },
+    "install_phrase": {
+      "type": "string",
+      "description": "用户复制到 IDE 对话的安装话术"
+    },
+    "sync_phrase": {
+      "type": "string",
+      "description": "用户复制到 IDE 对话的更新话术"
+    },
+    "teaser_slug": {
+      "type": "string",
+      "description": "关联 Explore 快速体验提示词 slug。有则输出 string；无则省略该字段（不会序列化为 null）。非 Agent Skill frontmatter。"
+    },
+    "price_fen": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "标价（分）。有则需单买或有效会员才可 install；无则免费。"
+    },
+    "price_display": {
+      "type": "string",
+      "description": "标价展示（如 ¥1.00）；与 price_fen 同时出现。"
+    }
+  }
+}

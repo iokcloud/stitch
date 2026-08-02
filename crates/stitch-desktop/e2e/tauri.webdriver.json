@@ -1,0 +1,15 @@
+{
+  "app": {
+    "security": {
+      "capabilities": [
+        "default",
+        {
+          "identifier": "webdriver",
+          "description": "E2E-only embedded WDIO WebDriver ACL",
+          "windows": ["main"],
+          "permissions": ["wdio-webdriver:default"]
+        }
+      ]
+    }
+  }
+}

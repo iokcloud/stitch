@@ -1,0 +1,11 @@
+node_modules/
+.svelte-kit/
+.DS_Store
+*.local
+.vscode/
+.idea/
+test-results/
+playwright-report/
+blob-report/
+playwright/.cache/
+e2e/artifacts/

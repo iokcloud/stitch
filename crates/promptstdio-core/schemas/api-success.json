@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://promptstdio.com/schemas/api-success.v1.json",
+  "title": "PromptStdio API Success Response",
+  "type": "object",
+  "required": ["data", "message"],
+  "properties": {
+    "data": {},
+    "message": {
+      "type": "string",
+      "const": "ok"
+    }
+  }
+}

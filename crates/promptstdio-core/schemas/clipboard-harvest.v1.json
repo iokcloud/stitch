@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://promptstdio.com/schemas/clipboard-harvest.v1.json",
+  "title": "PromptStdio Clipboard Harvest Block v1",
+  "description": "非 MCP 复利沉淀：用户从任意 AI 对话复制此 JSON 块，在 Web「从剪贴板入库」解析。字段与 suggest-prompt-request 对齐。",
+  "type": "object",
+  "required": ["title", "content"],
+  "properties": {
+    "title": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 255
+    },
+    "content": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 5000
+    },
+    "description": {
+      "type": ["string", "null"],
+      "maxLength": 2000
+    },
+    "tags": {
+      "type": "array",
+      "items": { "type": "string", "maxLength": 100 },
+      "maxItems": 10
+    },
+    "parameters": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name"],
+        "properties": {
+          "name": { "type": "string", "maxLength": 100 },
+          "description": { "type": "string" },
+          "default": { "type": "string" }
+        }
+      }
+    },
+    "harvest_meta": {
+      "type": "object",
+      "properties": {
+        "summary": { "type": "string", "maxLength": 2000 },
+        "structure_score": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "parameterization_score": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "security_score": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "quality_notes": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    }
+  },
+  "x-envelope": {
+    "marker": "<!-- promptstdio-harvest:v1 -->",
+    "fence": "```json",
+    "description": "完整复制块 = HTML 注释标记 + JSON 代码围栏；详见 ADR-014"
+  }
+}

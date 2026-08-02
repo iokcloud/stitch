@@ -1,0 +1,12 @@
+{
+  "identifier": "default",
+  "description": "Default capability for Stitch desktop",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "core:event:default",
+    "core:menu:default",
+    "shell:allow-open",
+    "updater:default"
+  ]
+}

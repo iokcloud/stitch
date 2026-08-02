@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://promptstdio.com/schemas/prompt.v1.json",
+  "title": "PromptStdio Prompt",
+  "type": "object",
+  "required": ["id", "title", "content"],
+  "properties": {
+    "id": { "type": "integer" },
+    "title": { "type": "string", "maxLength": 255 },
+    "description": { "type": "string" },
+    "tags": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "content": { "type": "string", "maxLength": 5000 },
+    "parameters": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name"],
+        "properties": {
+          "name": { "type": "string" },
+          "description": { "type": "string" },
+          "default": { "type": "string" }
+        }
+      }
+    },
+    "version": { "type": "integer", "minimum": 1 },
+    "updated_at": { "type": "string", "format": "date-time" }
+  }
+}

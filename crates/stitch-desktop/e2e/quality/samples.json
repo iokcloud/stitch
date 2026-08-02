@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "description": "Stitch chat quality sample set — score REVIEW.md / assistant dumps against a fixed rubric.",
+  "samples": [
+    {
+      "id": "review-diff",
+      "prompt": "审查本次改动",
+      "artifact": "e2e/artifacts/pre-deploy-review",
+      "runner": "pre-deploy-review",
+      "must": {
+        "tools_include_any": ["git_status", "git_diff"],
+        "assistant_regex": ["结论", "阻塞"],
+        "max_read_file": 30,
+        "forbid_unrecovered_missing_path": true
+      }
+    },
+    {
+      "id": "plan-multifile",
+      "prompt": "plan-mode multi-file coding (agent-rich complex)",
+      "artifact": "e2e/artifacts/agent-rich",
+      "runner": "agent-rich",
+      "must": {
+        "files_marker_or_count": true,
+        "note": "Scored by agent-rich.spec.ts (marker rich-probe-42 / file count)."
+      }
+    }
+  ],
+  "rubric": {
+    "pass_threshold": 1.0,
+    "checks": [
+      "tools_include_any",
+      "assistant_regex",
+      "max_read_file",
+      "forbid_unrecovered_missing_path"
+    ]
+  }
+}

@@ -1,0 +1,136 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://promptstdio.com/schemas/harvest-rules-response.v1.json",
+  "title": "PromptStdio Harvest Rules Response",
+  "description": "MCP 工具 get_harvest_rules 成功响应体（嵌于 MCP tool result data 字段）。IDE Agent 应在 MCP 会话初调一次，用于本地识别、generate_metadata 步骤与 suggest_prompt 校验。",
+  "type": "object",
+  "required": ["version", "detection", "scoring", "tags", "workflow"],
+  "properties": {
+    "version": {
+      "type": "string",
+      "const": "1.0",
+      "description": "规则契约版本"
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "用户规则最后保存时间；未自定义时为平台默认种子时间"
+    },
+    "is_default": {
+      "type": "boolean",
+      "description": "true 表示用户尚未在 Web 自定义，当前为 config/promptstdio.php 默认规则"
+    },
+    "detection": {
+      "type": "object",
+      "description": "自动识别规则（软约束，由本地 Agent 遵循；服务端不校验对话）",
+      "required": ["enabled", "threshold_hint", "exclude_hints", "frequency_hint", "ask_style"],
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "是否启用自动识别询问"
+        },
+        "threshold_hint": {
+          "type": "string",
+          "description": "何种用户输入值得询问入库（自然语言描述，供本地 Agent 理解）"
+        },
+        "exclude_hints": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "应跳过的场景描述（如闲聊、一次性问答）"
+        },
+        "frequency_hint": {
+          "type": "string",
+          "description": "询问频率建议（如「同一会话最多主动询问 2 次」）"
+        },
+        "ask_style": {
+          "type": "string",
+          "enum": ["direct", "gentle", "silent_manual_only"],
+          "description": "direct=符合条件即问；gentle=高置信才问；silent_manual_only=仅用户明说「存起来」时收割"
+        }
+      }
+    },
+    "scoring": {
+      "type": "object",
+      "description": "generate_metadata 本地评分维度（0–100 整数，随 suggest_prompt 提交）",
+      "required": ["structure", "parameterization", "security"],
+      "properties": {
+        "structure": {
+          "$ref": "#/$defs/scoringDimension"
+        },
+        "parameterization": {
+          "$ref": "#/$defs/scoringDimension"
+        },
+        "security": {
+          "$ref": "#/$defs/scoringDimension"
+        },
+        "low_score_threshold": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100,
+          "default": 60,
+          "description": "任一分项低于此值时，本地 Agent 应在对话中提示优化（不调用服务端）"
+        }
+      }
+    },
+    "tags": {
+      "type": "object",
+      "required": ["mode", "allowed", "max_count"],
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": ["whitelist", "suggest"],
+          "description": "whitelist=suggest_prompt 的 tags 须为 allowed 子集；suggest=仅建议，不强制"
+        },
+        "allowed": {
+          "type": "array",
+          "items": { "type": "string", "maxLength": 100 },
+          "description": "可选标签列表"
+        },
+        "max_count": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10,
+          "default": 5
+        }
+      }
+    },
+    "suite_hint": {
+      "type": "object",
+      "description": "M3 前可读；同标签累计达阈值后本地 Agent 可询问是否创建提示词采集器套件",
+      "properties": {
+        "same_tag_threshold": {
+          "type": "integer",
+          "minimum": 2,
+          "default": 3
+        }
+      }
+    },
+    "workflow": {
+      "type": "object",
+      "description": "本地 Agent 工作流摘要（非 MCP 工具名）",
+      "required": ["steps"],
+      "properties": {
+        "steps": {
+          "type": "array",
+          "items": { "type": "string" },
+          "minItems": 1,
+          "description": "推荐步骤顺序，如 get_harvest_rules → generate_metadata（本地）→ 用户确认 → suggest_prompt"
+        }
+      }
+    }
+  },
+  "$defs": {
+    "scoringDimension": {
+      "type": "object",
+      "required": ["label", "criteria"],
+      "properties": {
+        "label": { "type": "string" },
+        "criteria": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "评分 rubric 条目，供本地 Agent 逐项对照"
+        }
+      }
+    }
+  }
+}

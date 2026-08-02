@@ -1,0 +1,29 @@
+/* Figtree — local font bundle (Google Fonts, v9) */
+@font-face {
+    font-family: 'Figtree';
+    font-style: normal;
+    font-weight: 400;
+    src: url('./figtree-400.ttf') format('truetype');
+    font-display: swap;
+}
+@font-face {
+    font-family: 'Figtree';
+    font-style: normal;
+    font-weight: 500;
+    src: url('./figtree-500.ttf') format('truetype');
+    font-display: swap;
+}
+@font-face {
+    font-family: 'Figtree';
+    font-style: normal;
+    font-weight: 600;
+    src: url('./figtree-600.ttf') format('truetype');
+    font-display: swap;
+}
+@font-face {
+    font-family: 'Figtree';
+    font-style: normal;
+    font-weight: 700;
+    src: url('./figtree-700.ttf') format('truetype');
+    font-display: swap;
+}

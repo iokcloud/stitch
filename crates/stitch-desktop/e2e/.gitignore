@@ -1,0 +1,6 @@
+node_modules/
+*.log
+.wdio-*/
+msedgedriver*
+edge_driver/
+artifacts/

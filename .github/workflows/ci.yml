@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: crates/stitch-desktop/frontend/package-lock.json
+
+      - name: Frontend build
+        working-directory: crates/stitch-desktop/frontend
+        run: |
+          npm ci
+          npm run check
+          npm run build
+
+      - name: Cargo fmt & clippy
+        run: |
+          cargo fmt --check
+          cargo clippy --workspace -- -D warnings
+
+      - name: Cargo test
+        run: cargo test --workspace

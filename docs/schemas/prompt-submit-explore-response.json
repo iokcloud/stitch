@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://promptstdio.com/schemas/prompt-submit-explore-response.json",
+  "title": "PromptSubmitExploreResponse",
+  "description": "POST /api/v1/prompts/:id/submit-explore — copy personal prompt to system_prompt draft for ops review (ADR-033).",
+  "type": "object",
+  "required": ["system_prompt_id", "slug", "status", "access_level", "already_submitted"],
+  "properties": {
+    "system_prompt_id": {
+      "type": "string",
+      "description": "Created or existing system_prompt id"
+    },
+    "slug": { "type": "string" },
+    "status": {
+      "type": "string",
+      "enum": ["draft", "active", "deleted"]
+    },
+    "access_level": {
+      "type": "string",
+      "enum": ["public", "member_only", "private"]
+    },
+    "already_submitted": {
+      "type": "boolean",
+      "description": "true when an existing submission for this source_prompt_id was returned"
+    }
+  },
+  "additionalProperties": false
+}

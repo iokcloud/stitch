@@ -1,0 +1,83 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://promptstdio.com/schemas/usage-log-request.v1.json",
+  "title": "PromptStdio Usage Log Request",
+  "description": "POST usage-logs/track（Web 复制埋点）及服务端漏斗/配额埋点请求体",
+  "type": "object",
+  "required": ["action"],
+  "properties": {
+    "prompt_id": {
+      "type": ["integer", "string", "null"],
+      "description": "Laravel MySQL 整数 id 或 Rust Surreal 裸 id 字符串"
+    },
+    "action": {
+      "type": "string",
+      "enum": [
+        "copy_prompt",
+        "copy_suite",
+        "save_from_explore",
+        "copy_member_pack",
+        "save_suite_from_explore",
+        "save_suite_from_member_zone",
+        "view_explore",
+        "view_member_pack",
+        "view_pricing",
+        "quota_hit",
+        "stitch_chat_done",
+        "stitch_scene_run",
+        "stitch_suite_run",
+        "stitch_suite_done",
+        "stitch_agent_run",
+        "stitch_sediment_copy",
+        "stitch_sediment_save",
+        "stitch_mature_gate_soft",
+        "stitch_mature_gate_block",
+        "stitch_mature_unlock"
+      ]
+    },
+    "context": {
+      "type": "object",
+      "properties": {
+        "source": {
+          "type": "string"
+        },
+        "task_suite_id": {
+          "type": ["integer", "string", "null"],
+          "description": "Laravel MySQL 整数 id 或 Rust Surreal 裸 id / explore slug"
+        },
+        "step": {
+          "type": ["integer", "string", "null"],
+          "description": "会员工具包步骤序号（复制本步）"
+        },
+        "kind": {
+          "type": "string",
+          "description": "配额触顶资源类型：prompt / suite / agent；或沉淀结果 ok/fail"
+        },
+        "from": {
+          "type": "string",
+          "description": "来源标记，如 explore / scene / chat"
+        },
+        "scene": {
+          "type": "string",
+          "description": "Stitch 本地推荐场景 id"
+        },
+        "outcome": {
+          "type": "string",
+          "description": "suite/agent 结果：done / failed / cancelled"
+        },
+        "tools": {
+          "type": "string",
+          "description": "本轮用到的工具名，逗号分隔（汇总，非逐次调用）"
+        },
+        "tool_count": {
+          "type": "string",
+          "description": "本轮工具调用次数（字符串数字）"
+        },
+        "client": {
+          "type": "string",
+          "description": "客户端标记，如 stitch-desktop"
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,94 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://promptstdio.com/schemas/skill-install-payload.v1.json",
+  "title": "PromptStdio Skill Install Payload",
+  "description": "MCP install_skill / sync_skill 成功时 data 字段（嵌于 MCP tool result）。Agent 按 instruction 将 files 写入自选 IDE Skill 目录。",
+  "type": "object",
+  "required": [
+    "slug",
+    "version",
+    "status",
+    "path_selection",
+    "spec",
+    "common_skill_paths",
+    "instruction",
+    "files"
+  ],
+  "properties": {
+    "slug": {
+      "type": "string",
+      "description": "Skill 目录名 / agentskills.io name（小写连字符）"
+    },
+    "title": {
+      "type": "string",
+      "description": "Web/MCP 展示用中文标题；status=up_to_date 时可能省略"
+    },
+    "version": {
+      "type": "string",
+      "description": "与 packs/skills/{slug}/SKILL.md metadata.version 及 SkillBundleDef.version 一致"
+    },
+    "status": {
+      "type": "string",
+      "enum": ["installed", "updated", "up_to_date"],
+      "description": "installed=首次下发；updated=local_version 落后；up_to_date=已最新（files 为空）"
+    },
+    "mode": {
+      "type": "string",
+      "enum": ["remote"],
+      "description": "下发模式；当前仅 remote（内容由 MCP 返回）"
+    },
+    "path_selection": {
+      "type": "string",
+      "const": "agent",
+      "description": "安装路径由 Agent 按当前 IDE 选择；勿硬编码单一 install_root"
+    },
+    "spec": {
+      "type": "string",
+      "const": "agentskills.io",
+      "description": "声明对齐 Agent Skills 规范"
+    },
+    "install_guide": {
+      "type": "string",
+      "description": "安装说明全文（与 install_guide_file 内容对应）"
+    },
+    "install_guide_file": {
+      "type": "string",
+      "description": "files 内相对路径，通常为 references/install-guide.md"
+    },
+    "common_skill_paths": {
+      "type": "object",
+      "description": "常见 skills-root 参考表（key=根路径如 .cursor/skills）。仅供参考，Agent 自选其一。",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["path", "label"],
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "建议写入路径，如 .cursor/skills/pm-prd-demo"
+          },
+          "label": { "type": "string" },
+          "hint": { "type": "string" }
+        }
+      }
+    },
+    "instruction": {
+      "type": "string",
+      "description": "给 Agent 的写盘指令（含保持相对 path 结构）"
+    },
+    "files": {
+      "type": "array",
+      "description": "up_to_date 时为空数组；否则含 SKILL.md 与 references/*",
+      "items": {
+        "type": "object",
+        "required": ["path", "content"],
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "相对 Skill 根的路径，如 SKILL.md"
+          },
+          "content": { "type": "string" }
+        }
+      }
+    }
+  }
+}

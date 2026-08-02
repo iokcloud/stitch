@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://promptstdio.com/schemas/suggest-prompt-response.v1.json",
+  "title": "PromptStdio Suggest Prompt Response",
+  "description": "MCP 工具 suggest_prompt 成功响应体（嵌于 MCP tool result data 字段）",
+  "type": "object",
+  "required": ["prompt_id", "title", "same_tag_count"],
+  "properties": {
+    "prompt_id": {
+      "type": "integer",
+      "description": "新创建的 prompts.id"
+    },
+    "title": { "type": "string" },
+    "tags": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "harvest_source": {
+      "type": "string",
+      "enum": ["manual", "auto"]
+    },
+    "harvest_meta": {
+      "type": "object",
+      "description": "回显已存储的结构分等元数据"
+    },
+    "same_tag_count": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "当前用户库中与本次 tags 交集最大的标签维度下，相关提示词数量（含本次）；供本地 Agent 判断是否询问创建提示词采集器套件"
+    },
+    "related_prompt_ids": {
+      "type": "array",
+      "items": { "type": "integer" },
+      "description": "M2：SQL 标签匹配的相关提示词 ID，最多 5 条；M1 可省略"
+    },
+    "suite_hint": {
+      "type": "object",
+      "properties": {
+        "should_ask": {
+          "type": "boolean",
+          "description": "same_tag_count >= get_harvest_rules.suite_hint.same_tag_threshold"
+        },
+        "threshold": { "type": "integer" }
+      }
+    }
+  }
+}

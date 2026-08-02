@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://promptstdio.com/schemas/prompt-write-request.v1.json",
+  "title": "PromptStdio Prompt Write Request",
+  "description": "POST/PATCH /api/v1/prompts 与 Web 创建/更新提示词请求体",
+  "type": "object",
+  "required": ["title", "content"],
+  "properties": {
+    "title": { "type": "string", "minLength": 1, "maxLength": 255 },
+    "description": { "type": ["string", "null"] },
+    "tags": {
+      "type": ["array", "null"],
+      "items": { "type": "string", "maxLength": 100 }
+    },
+    "content": { "type": "string", "maxLength": 5000 },
+    "parameters": {
+      "type": ["array", "null"],
+      "items": {
+        "type": "object",
+        "required": ["name"],
+        "properties": {
+          "name": { "type": "string", "maxLength": 100 },
+          "description": { "type": "string" },
+          "default": { "type": "string" }
+        }
+      }
+    },
+    "harvest_meta": { "type": ["object", "null"] },
+    "harvest_source": { "type": ["string", "null"] }
+  }
+}
