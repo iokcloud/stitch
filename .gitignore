@@ -25,3 +25,14 @@ NVIDIA Corporation/
 .env.*
 *.key
 *.pem
+
+# crates 内构建产物
+crates/stitch-desktop/frontend/build/
+crates/stitch-desktop/frontend/.svelte-kit/
+crates/stitch-desktop/frontend/node_modules/
+crates/stitch-desktop/e2e/node_modules/
+crates/stitch-desktop/e2e/artifacts/
+crates/stitch-desktop/e2e/logs/
+crates/stitch-desktop/frontend/e2e/artifacts/
+crates/stitch-desktop/frontend/test-results/
+crates/stitch-desktop/frontend/playwright-report/
