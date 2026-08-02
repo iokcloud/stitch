@@ -422,7 +422,7 @@ fn decode_console_bytes(bytes: &[u8]) -> String {
     #[cfg(windows)]
     {
         let (cow, _, _) = encoding_rs::GBK.decode(bytes);
-        return cow.into_owned();
+        cow.into_owned()
     }
     #[cfg(not(windows))]
     {

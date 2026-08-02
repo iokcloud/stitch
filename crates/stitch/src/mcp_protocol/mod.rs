@@ -215,10 +215,10 @@ fn tool_from_rmcp(server_id: &str, t: &RmcpTool) -> DiscoveredMcpTool {
 
 fn content_to_string(result: &rmcp::model::CallToolResult) -> String {
     if result.content.is_empty() {
-        if let Some(err) = &result.is_error {
-            if *err {
-                return "MCP tool reported an error (no content)".into();
-            }
+        if let Some(err) = &result.is_error
+            && *err
+        {
+            return "MCP tool reported an error (no content)".into();
         }
         return String::new();
     }

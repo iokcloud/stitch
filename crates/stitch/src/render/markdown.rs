@@ -297,7 +297,7 @@ fn render_code_block(
 
             let ranges = h
                 .highlight_line(line, ps)
-                .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+                .map_err(|e| io::Error::other(e.to_string()))?;
             let escaped = syntect::util::as_24_bit_terminal_escaped(&ranges, false);
             write!(out, "{escaped}")?;
         }
@@ -326,7 +326,7 @@ fn choose_dark_theme(ts: &ThemeSet) -> &syntect::highlighting::Theme {
             ts.themes.values().find(|t| {
                 t.settings
                     .background
-                    .map_or(false, |bg| bg.r < 80 && bg.g < 80 && bg.b < 80)
+                    .is_some_and(|bg| bg.r < 80 && bg.g < 80 && bg.b < 80)
             })
         })
         .unwrap_or_else(|| {

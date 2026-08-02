@@ -126,7 +126,7 @@ impl Content {
                     *text = new_text;
                     return;
                 } else {
-                    format!("{prefix}")
+                    prefix.to_string()
                 };
                 parts.insert(0, ContentPart::Text { text: merged });
             }

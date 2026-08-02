@@ -205,6 +205,7 @@ impl McpClient {
     }
 
     /// Fire-and-forget friendly usage track (requires Token).
+    #[allow(clippy::disallowed_methods)] // serde_json::json! 宏展开内含 unwrap
     pub async fn track_usage(
         &self,
         action: &str,
@@ -223,6 +224,7 @@ impl McpClient {
     }
 
     /// Create a personal prompt (POST /api/v1/prompts).
+    #[allow(clippy::disallowed_methods)] // serde_json::json! 宏展开内含 unwrap
     pub async fn create_prompt(
         &self,
         title: &str,

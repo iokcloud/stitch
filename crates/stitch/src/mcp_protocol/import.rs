@@ -20,7 +20,7 @@ pub fn parse_mcp_servers_json(raw: &str) -> anyhow::Result<Vec<McpServerProfile>
     let map = extract_server_map(&v)?;
     let mut out = Vec::new();
     for (id, entry) in map {
-        out.push(profile_from_entry(&id, entry)?);
+        out.push(profile_from_entry(id, entry)?);
     }
     if out.is_empty() {
         anyhow::bail!("未找到任何 MCP 服务");

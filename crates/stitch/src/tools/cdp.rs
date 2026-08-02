@@ -344,7 +344,7 @@ impl CdpClient {
 
         let text = serde_json::to_string(&msg)?;
         self.ws
-            .send(tokio_tungstenite::tungstenite::Message::Text(text.into()))
+            .send(tokio_tungstenite::tungstenite::Message::Text(text))
             .await?;
 
         // Read response — CDP sends matching id
@@ -483,10 +483,10 @@ impl CdpClient {
             }
             match tokio::time::timeout(remaining, self.ws.next()).await {
                 Ok(Some(Ok(tokio_tungstenite::tungstenite::Message::Text(t)))) => {
-                    if let Ok(v) = serde_json::from_str::<Value>(&t) {
-                        if v.get("method").and_then(|m| m.as_str()) == Some("Page.loadEventFired") {
-                            break;
-                        }
+                    if let Ok(v) = serde_json::from_str::<Value>(&t)
+                        && v.get("method").and_then(|m| m.as_str()) == Some("Page.loadEventFired")
+                    {
+                        break;
                     }
                 }
                 _ => break,
@@ -498,10 +498,10 @@ impl CdpClient {
 /// Pick the best page target from /json.
 fn pick_target<'a>(targets: &'a [TargetInfo], prefer_url: Option<&str>) -> Option<&'a TargetInfo> {
     // Prefer a target whose URL matches the hint
-    if let Some(hint) = prefer_url {
-        if let Some(t) = targets.iter().find(|t| t.url.contains(hint)) {
-            return Some(t);
-        }
+    if let Some(hint) = prefer_url
+        && let Some(t) = targets.iter().find(|t| t.url.contains(hint))
+    {
+        return Some(t);
     }
 
     // Pick the first "page" type target
