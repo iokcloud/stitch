@@ -863,9 +863,10 @@ fn window_action_linux(title_part: &str, action: &str) -> anyhow::Result<ToolRes
     let mut done = 0usize;
     for id in id_list {
         let r = Command::new("xdotool").args([sub, id]).output();
-        if let Ok(o) = r {
-            if o.status.success() {
-                done += 1;
+        if let Ok(o) = r
+            && o.status.success()
+        {
+            done += 1;
             }
         }
     }
@@ -1152,7 +1153,7 @@ fn key_macos(keys: &[String]) -> anyhow::Result<ToolResult> {
     if mods.is_empty() {
         let script = format!(
             "tell application \"System Events\" to keystroke \"{}\"",
-            base_joined.replace('"', "\"")
+            base_joined
         );
         let out = Command::new("osascript").arg("-e").arg(&script).output();
         return match out {
@@ -1186,7 +1187,7 @@ fn key_macos(keys: &[String]) -> anyhow::Result<ToolResult> {
         .join(", ");
     let script = format!(
         "tell application \"System Events\" to keystroke \"{}\" using {{{mods_joined}}}",
-        base_joined.replace('"', "\"")
+        base_joined
     );
     let out = Command::new("osascript").arg("-e").arg(&script).output();
     match out {
