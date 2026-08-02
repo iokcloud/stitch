@@ -413,10 +413,8 @@ fn apply_history(session: &mut Session, history: &[HistoryMessage]) {
                     msg.images.as_deref().unwrap_or(&[]),
                 ));
             }
-            "assistant" => {
-                if !content.is_empty() {
-                    session.add_assistant_message(content);
-                }
+            "assistant" if !content.is_empty() => {
+                session.add_assistant_message(content);
             }
             _ => {}
         }
@@ -795,7 +793,7 @@ pub(crate) fn open_http_url(url: &str) -> Result<(), String> {
             .args(["/C", "start", "", url])
             .spawn()
             .map_err(|e| format!("无法打开链接: {e}"))?;
-        return Ok(());
+        Ok(())
     }
     #[cfg(target_os = "macos")]
     {
@@ -834,15 +832,15 @@ fn display_path(path: &std::path::Path) -> String {
 }
 
 fn resolve_initial_work_dir() -> String {
-    if let Ok(cfg) = StitchConfig::load() {
-        if let Some(ref p) = cfg.work_dir {
-            let pb = PathBuf::from(p);
-            if pb.is_dir() {
-                return pb
-                    .canonicalize()
-                    .map(|c| display_path(&c))
-                    .unwrap_or_else(|_| p.clone());
-            }
+    if let Ok(cfg) = StitchConfig::load()
+        && let Some(ref p) = cfg.work_dir
+    {
+        let pb = PathBuf::from(p);
+        if pb.is_dir() {
+            return pb
+                .canonicalize()
+                .map(|c| display_path(&c))
+                .unwrap_or_else(|_| p.clone());
         }
     }
     std::env::current_dir()
@@ -1421,21 +1419,21 @@ pub(crate) fn discover_local_skills(
     home: Option<&std::path::Path>,
 ) -> Vec<LocalSkillRow> {
     let mut out = Vec::new();
-    if let Some(base) = work_dir {
-        if !base.as_os_str().is_empty() {
-            collect_skills_under(
-                &base.join(".agents").join("skills"),
-                ".agents/skills",
-                "workspace",
-                &mut out,
-            );
-            collect_skills_under(
-                &base.join(".cursor").join("skills"),
-                ".cursor/skills",
-                "workspace",
-                &mut out,
-            );
-        }
+    if let Some(base) = work_dir
+        && !base.as_os_str().is_empty()
+    {
+        collect_skills_under(
+            &base.join(".agents").join("skills"),
+            ".agents/skills",
+            "workspace",
+            &mut out,
+        );
+        collect_skills_under(
+            &base.join(".cursor").join("skills"),
+            ".cursor/skills",
+            "workspace",
+            &mut out,
+        );
     }
     if let Some(home) = home {
         collect_skills_under(
@@ -1568,16 +1566,15 @@ fn friendly_llm_test_error(status: u16, body: &str) -> String {
     {
         return "模型名称不可用，请更换后重试".into();
     }
-    if let Ok(v) = serde_json::from_str::<serde_json::Value>(body) {
-        if let Some(msg) = v
+    if let Ok(v) = serde_json::from_str::<serde_json::Value>(body)
+        && let Some(msg) = v
             .pointer("/error/message")
             .and_then(|x| x.as_str())
             .or_else(|| v.get("message").and_then(|x| x.as_str()))
-        {
-            let m = msg.to_ascii_lowercase();
-            if m.contains("authentication") || m.contains("api key") {
-                return "API Key 无效，请检查后重试".into();
-            }
+    {
+        let m = msg.to_ascii_lowercase();
+        if m.contains("authentication") || m.contains("api key") {
+            return "API Key 无效，请检查后重试".into();
         }
     }
     if body.chars().count() > 160 {
@@ -1675,20 +1672,18 @@ pub fn respond_confirmation(
     }
     //「记住此规则」: persist a normalized rule so the same scope skips
     // confirmation from the next call on (same turn included).
-    if approved {
-        if let Some(rule) = remember.and_then(stitch::allow::AllowRules::normalize) {
-            let mut rules = state.rules.lock().map_err(|e| e.to_string())?;
-            if rules.add(rule.clone()) {
-                if let Err(e) = rules.save() {
-                    tracing::warn!(error = %e, "failed to persist allow rule");
-                }
-                tracing::info!(
-                    tool = %rule.tool,
-                    scope = %rule.scope,
-                    value = %rule.value,
-                    "allow rule remembered"
-                );
+    if approved && let Some(rule) = remember.and_then(stitch::allow::AllowRules::normalize) {
+        let mut rules = state.rules.lock().map_err(|e| e.to_string())?;
+        if rules.add(rule.clone()) {
+            if let Err(e) = rules.save() {
+                tracing::warn!(error = %e, "failed to persist allow rule");
             }
+            tracing::info!(
+                tool = %rule.tool,
+                scope = %rule.scope,
+                value = %rule.value,
+                "allow rule remembered"
+            );
         }
     }
     Ok(())
@@ -1809,7 +1804,7 @@ pub fn open_folder_path(path: String) -> Result<(), String> {
             .arg(&shown)
             .spawn()
             .map_err(|e| format!("无法打开文件夹: {e}"))?;
-        return Ok(());
+        Ok(())
     }
     #[cfg(target_os = "macos")]
     {
@@ -1980,6 +1975,7 @@ async fn pump_agent_events_opts(
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)] // 历史 API 签名
 pub async fn send_message(
     app: tauri::AppHandle,
     state: tauri::State<'_, CancelState>,
@@ -2229,7 +2225,7 @@ pub async fn send_message(
             serde_json::to_value(AgentEvent::PlanApproved).unwrap_or_default(),
         );
 
-        session.add_assistant_message(&format!("已批准执行计划：\n\n{}", plan.format()));
+        session.add_assistant_message(format!("已批准执行计划：\n\n{}", plan.format()));
 
         let step_budget = max_iterations.clamp(4, 12);
         let total_steps = plan.steps.len();
