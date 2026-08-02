@@ -7,7 +7,7 @@ Stitch 一键构建脚本（Windows · PowerShell）
 用法：
   powershell -ExecutionPolicy Bypass -File install.ps1
 或远程执行：
-  irm https://raw.githubusercontent.com/PROMPTSTDIO_REPO/stitch/main/scripts/install.ps1 | iex
+  irm https://raw.githubusercontent.com/iokcloud/stitch/main/scripts/install.ps1 | iex
 #>
 
 $ErrorActionPreference = "Stop"

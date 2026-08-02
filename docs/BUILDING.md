@@ -26,7 +26,7 @@ npm 镜像：`npm config set registry https://registry.npmmirror.com`
 ## 构建步骤
 
 ```bash
-git clone https://github.com/PROMPTSTDIO_REPO/stitch.git
+git clone https://github.com/iokcloud/stitch.git
 cd stitch
 
 # 1. 构建前端（SvelteKit SSG，产物嵌入 exe）

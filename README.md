@@ -31,7 +31,7 @@
 PowerShell 执行：
 
 ```powershell
-irm https://raw.githubusercontent.com/PROMPTSTDIO_REPO/stitch/main/scripts/install.ps1 | iex
+irm https://raw.githubusercontent.com/iokcloud/stitch/main/scripts/install.ps1 | iex
 ```
 
 脚本自动检测环境、安装缺失依赖、配置国内镜像、构建并启动。约 10 分钟出产物。
@@ -39,7 +39,7 @@ irm https://raw.githubusercontent.com/PROMPTSTDIO_REPO/stitch/main/scripts/insta
 ### 方式三：从源码构建
 
 ```bash
-git clone https://github.com/PROMPTSTDIO_REPO/stitch.git
+git clone https://github.com/iokcloud/stitch.git
 cd stitch
 cargo build --release -p stitch-desktop
 ```
