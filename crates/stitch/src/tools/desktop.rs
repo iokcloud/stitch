@@ -54,15 +54,168 @@ impl DesktopScreenshot {
                 .unwrap_or(false);
             screenshot_windows(&self.output_dir, ocr)
         }
-        #[cfg(not(windows))]
+        #[cfg(target_os = "linux")]
+        {
+            let ocr = arguments
+                .get("ocr")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            screenshot_linux(&self.output_dir, ocr)
+        }
+        #[cfg(target_os = "macos")]
+        {
+            let ocr = arguments
+                .get("ocr")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            screenshot_macos(&self.output_dir, ocr)
+        }
+        #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
         {
             Ok(ToolResult {
                 metrics: None,
                 success: false,
-                output: "desktop_screenshot is only supported on Windows".into(),
+                output: "desktop_screenshot is only supported on Windows/macOS/Linux".into(),
             })
         }
     }
+}
+
+/// 跨平台截图：Linux 用 `import`（ImageMagick）或 `gnome-screenshot`；macOS 用 `screencapture`。
+/// 输出 PNG 到 output_dir，带时间戳文件名。
+#[cfg(target_os = "linux")]
+fn screenshot_linux(output_dir: &std::path::PathBuf, ocr: bool) -> anyhow::Result<ToolResult> {
+    use std::process::Command;
+    std::fs::create_dir_all(output_dir)?;
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let path = output_dir.join(format!("screenshot-{stamp}.png"));
+    let result = Command::new("import")
+        .arg("-window")
+        .arg("root")
+        .arg(&path)
+        .output();
+    let (success, err) = match result {
+        Ok(o) => (
+            o.status.success(),
+            String::from_utf8_lossy(&o.stderr).to_string(),
+        ),
+        Err(e) => (false, e.to_string()),
+    };
+    if !success {
+        // 回退：gnome-screenshot
+        let fb = Command::new("gnome-screenshot")
+            .arg("-f")
+            .arg(&path)
+            .output();
+        match fb {
+            Ok(o) if o.status.success() => (),
+            Ok(o) => {
+                return Ok(ToolResult {
+                    metrics: None,
+                    success: false,
+                    output: format!(
+                        "截图失败（需安装 imagemagick 或 gnome-screenshot）：{}",
+                        String::from_utf8_lossy(&o.stderr)
+                    ),
+                });
+            }
+            Err(e) => {
+                return Ok(ToolResult {
+                    metrics: None,
+                    success: false,
+                    output: format!("截图失败：{e}（需安装 imagemagick 或 gnome-screenshot）"),
+                });
+            }
+        }
+        let _ = err;
+    }
+    let text = if ocr {
+        // OCR：优先 tesseract（中文需 chi_sim 语言包）
+        let out = Command::new("tesseract")
+            .arg(&path)
+            .arg("stdout")
+            .arg("-l")
+            .arg("chi_sim+eng")
+            .output();
+        match out {
+            Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).to_string(),
+            _ => String::new(),
+        }
+    } else {
+        String::new()
+    };
+    let mut output = format!("截图已保存：{}", path.display());
+    if !text.trim().is_empty() {
+        output.push_str(&format!(
+            "
+屏幕文字（OCR）：
+{text}"
+        ));
+    }
+    Ok(ToolResult {
+        metrics: None,
+        success: true,
+        output,
+    })
+}
+
+#[cfg(target_os = "macos")]
+fn screenshot_macos(output_dir: &std::path::PathBuf, ocr: bool) -> anyhow::Result<ToolResult> {
+    use std::process::Command;
+    std::fs::create_dir_all(output_dir)?;
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let path = output_dir.join(format!("screenshot-{stamp}.png"));
+    let result = Command::new("screencapture").arg("-x").arg(&path).output();
+    match result {
+        Ok(o) if o.status.success() => (),
+        Ok(o) => {
+            return Ok(ToolResult {
+                metrics: None,
+                success: false,
+                output: format!("截图失败：{}", String::from_utf8_lossy(&o.stderr)),
+            });
+        }
+        Err(e) => {
+            return Ok(ToolResult {
+                metrics: None,
+                success: false,
+                output: format!("截图失败：{e}（screencapture 不可用）"),
+            });
+        }
+    }
+    let text = if ocr {
+        let out = Command::new("tesseract")
+            .arg(&path)
+            .arg("stdout")
+            .arg("-l")
+            .arg("chi_sim+eng")
+            .output();
+        match out {
+            Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).to_string(),
+            _ => String::new(),
+        }
+    } else {
+        String::new()
+    };
+    let mut output = format!("截图已保存：{}", path.display());
+    if !text.trim().is_empty() {
+        output.push_str(&format!(
+            "
+屏幕文字（OCR）：
+{text}"
+        ));
+    }
+    Ok(ToolResult {
+        metrics: None,
+        success: true,
+        output,
+    })
 }
 
 #[cfg(windows)]
@@ -160,14 +313,96 @@ impl DesktopClick {
 
             click_windows(x, y, button)
         }
-        #[cfg(not(windows))]
+        #[cfg(target_os = "linux")]
+        {
+            let x = arguments["x"]
+                .as_i64()
+                .ok_or_else(|| anyhow::anyhow!("Missing 'x' argument"))?;
+            let y = arguments["y"]
+                .as_i64()
+                .ok_or_else(|| anyhow::anyhow!("Missing 'y' argument"))?;
+            let button = arguments["button"].as_str().unwrap_or("left");
+            click_linux(x, y, button)
+        }
+        #[cfg(target_os = "macos")]
+        {
+            let x = arguments["x"]
+                .as_i64()
+                .ok_or_else(|| anyhow::anyhow!("Missing 'x' argument"))?;
+            let y = arguments["y"]
+                .as_i64()
+                .ok_or_else(|| anyhow::anyhow!("Missing 'y' argument"))?;
+            let button = arguments["button"].as_str().unwrap_or("left");
+            click_macos(x, y, button)
+        }
+        #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
         {
             Ok(ToolResult {
                 metrics: None,
                 success: false,
-                output: "desktop_click is only supported on Windows".into(),
+                output: "desktop_click is only supported on Windows/macOS/Linux".into(),
             })
         }
+    }
+}
+
+/// Linux 点击：xdotool mousemove + click。
+#[cfg(target_os = "linux")]
+fn click_linux(x: i64, y: i64, button: &str) -> anyhow::Result<ToolResult> {
+    use std::process::Command;
+    let btn = match button {
+        "right" => "3",
+        "middle" => "2",
+        _ => "1",
+    };
+    let ok = Command::new("xdotool")
+        .args(["mousemove", &x.to_string(), &y.to_string(), "click", btn])
+        .status();
+    match ok {
+        Ok(st) if st.success() => Ok(ToolResult {
+            metrics: None,
+            success: true,
+            output: format!("Clicked ({x}, {y}) {button}"),
+        }),
+        Ok(_) => Ok(ToolResult {
+            metrics: None,
+            success: false,
+            output: "点击失败（xdotool 不可用？）".into(),
+        }),
+        Err(e) => Ok(ToolResult {
+            metrics: None,
+            success: false,
+            output: format!("点击失败：{e}（需安装 xdotool）"),
+        }),
+    }
+}
+
+/// macOS 点击：AppleScript System Events `click at`（需辅助功能权限）。
+#[cfg(target_os = "macos")]
+fn click_macos(x: i64, y: i64, button: &str) -> anyhow::Result<ToolResult> {
+    use std::process::Command;
+    let _ = button; // System Events click 默认左键；右键需 CGEvent 级别，先支持左键
+    let script = format!("tell application \"System Events\" to click at {{{x}, {y}}}");
+    let out = Command::new("osascript").arg("-e").arg(&script).output();
+    match out {
+        Ok(o) if o.status.success() => Ok(ToolResult {
+            metrics: None,
+            success: true,
+            output: format!("Clicked ({x}, {y})"),
+        }),
+        Ok(o) => Ok(ToolResult {
+            metrics: None,
+            success: false,
+            output: format!(
+                "点击失败：{}（需辅助功能权限）",
+                String::from_utf8_lossy(&o.stderr)
+            ),
+        }),
+        Err(e) => Ok(ToolResult {
+            metrics: None,
+            success: false,
+            output: format!("点击失败：{e}"),
+        }),
     }
 }
 
@@ -240,14 +475,86 @@ impl DesktopType {
             let t0 = std::time::Instant::now();
             type_text_windows(text).map(|r| r.with_duration_ms(t0))
         }
-        #[cfg(not(windows))]
+        #[cfg(target_os = "linux")]
+        {
+            let text = arguments["text"]
+                .as_str()
+                .ok_or_else(|| anyhow::anyhow!("Missing 'text' argument"))?;
+            type_text_linux(text)
+        }
+        #[cfg(target_os = "macos")]
+        {
+            let text = arguments["text"]
+                .as_str()
+                .ok_or_else(|| anyhow::anyhow!("Missing 'text' argument"))?;
+            type_text_macos(text)
+        }
+        #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
         {
             Ok(ToolResult {
                 metrics: None,
                 success: false,
-                output: "desktop_type is only supported on Windows".into(),
+                output: "desktop_type is only supported on Windows/macOS/Linux".into(),
             })
         }
+    }
+}
+
+/// Linux 键入：xdotool type（unicode 需 xdotool ≥ 3.20160805）。
+#[cfg(target_os = "linux")]
+fn type_text_linux(text: &str) -> anyhow::Result<ToolResult> {
+    use std::process::Command;
+    let out = Command::new("xdotool")
+        .args(["type", "--delay", "30"])
+        .arg(text)
+        .output();
+    match out {
+        Ok(o) if o.status.success() => Ok(ToolResult {
+            metrics: None,
+            success: true,
+            output: format!("Typed {} chars", text.chars().count()),
+        }),
+        Ok(o) => Ok(ToolResult {
+            metrics: None,
+            success: false,
+            output: format!("键入失败：{}", String::from_utf8_lossy(&o.stderr)),
+        }),
+        Err(e) => Ok(ToolResult {
+            metrics: None,
+            success: false,
+            output: format!("键入失败：{e}（需安装 xdotool）"),
+        }),
+    }
+}
+
+/// macOS 键入：System Events keystroke（需辅助功能权限）。
+#[cfg(target_os = "macos")]
+fn type_text_macos(text: &str) -> anyhow::Result<ToolResult> {
+    use std::process::Command;
+    let script = format!(
+        "tell application \"System Events\" to keystroke {}",
+        serde_json::to_string(text).unwrap_or_default()
+    );
+    let out = Command::new("osascript").arg("-e").arg(&script).output();
+    match out {
+        Ok(o) if o.status.success() => Ok(ToolResult {
+            metrics: None,
+            success: true,
+            output: format!("Typed {} chars", text.chars().count()),
+        }),
+        Ok(o) => Ok(ToolResult {
+            metrics: None,
+            success: false,
+            output: format!(
+                "键入失败：{}（需辅助功能权限）",
+                String::from_utf8_lossy(&o.stderr)
+            ),
+        }),
+        Err(e) => Ok(ToolResult {
+            metrics: None,
+            success: false,
+            output: format!("键入失败：{e}"),
+        }),
     }
 }
 
@@ -570,14 +877,121 @@ impl DesktopKey {
             let t0 = std::time::Instant::now();
             send_key_combo(&keys).map(|r| r.with_duration_ms(t0))
         }
-        #[cfg(not(windows))]
+        #[cfg(target_os = "linux")]
+        {
+            key_linux(&keys)
+        }
+        #[cfg(target_os = "macos")]
+        {
+            key_macos(&keys)
+        }
+        #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
         {
             Ok(ToolResult {
                 metrics: None,
                 success: false,
-                output: "desktop_key is only supported on Windows".into(),
+                output: "desktop_key is only supported on Windows/macOS/Linux".into(),
             })
         }
+    }
+}
+
+/// Linux 按键：xdotool key（组合键如 "ctrl+c"）。
+#[cfg(target_os = "linux")]
+fn key_linux(keys: &[String]) -> anyhow::Result<ToolResult> {
+    use std::process::Command;
+    let combo = keys.join("+");
+    let out = Command::new("xdotool").args(["key", &combo]).output();
+    match out {
+        Ok(o) if o.status.success() => Ok(ToolResult {
+            metrics: None,
+            success: true,
+            output: format!("Pressed {combo}"),
+        }),
+        Ok(o) => Ok(ToolResult {
+            metrics: None,
+            success: false,
+            output: format!("按键失败：{}", String::from_utf8_lossy(&o.stderr)),
+        }),
+        Err(e) => Ok(ToolResult {
+            metrics: None,
+            success: false,
+            output: format!("按键失败：{e}（需安装 xdotool）"),
+        }),
+    }
+}
+
+/// macOS 按键：System Events key code / keystroke（组合键需 key code 映射，先支持简单键）。
+#[cfg(target_os = "macos")]
+fn key_macos(keys: &[String]) -> anyhow::Result<ToolResult> {
+    use std::process::Command;
+    // 简单键名直发；组合键（含 ctrl/cmd/alt/shift）用 keystroke + using
+    let (base, mods): (Vec<&String>, Vec<&String>) = keys.iter().partition(|k| {
+        !matches!(
+            k.as_str(),
+            "ctrl" | "cmd" | "alt" | "shift" | "option" | "control" | "command"
+        )
+    });
+    let base_joined = base.join("");
+    if mods.is_empty() {
+        let script = format!(
+            "tell application \"System Events\" to keystroke \"{}\"",
+            base_joined.replace('"', "\"")
+        );
+        let out = Command::new("osascript").arg("-e").arg(&script).output();
+        return match out {
+            Ok(o) if o.status.success() => Ok(ToolResult {
+                metrics: None,
+                success: true,
+                output: format!("Pressed {}", keys.join("+")),
+            }),
+            Ok(o) => Ok(ToolResult {
+                metrics: None,
+                success: false,
+                output: format!("按键失败：{}", String::from_utf8_lossy(&o.stderr)),
+            }),
+            Err(e) => Ok(ToolResult {
+                metrics: None,
+                success: false,
+                output: format!("按键失败：{e}"),
+            }),
+        };
+    }
+    let mods_joined = mods
+        .iter()
+        .map(|m| match m.as_str() {
+            "ctrl" | "control" => "control down",
+            "cmd" | "command" => "command down",
+            "alt" | "option" => "option down",
+            "shift" => "shift down",
+            _ => "command down",
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    let script = format!(
+        "tell application \"System Events\" to keystroke \"{}\" using {{{mods_joined}}}",
+        base_joined.replace('"', "\"")
+    );
+    let out = Command::new("osascript").arg("-e").arg(&script).output();
+    match out {
+        Ok(o) if o.status.success() => Ok(ToolResult {
+            metrics: None,
+            success: true,
+            output: format!("Pressed {}", keys.join("+")),
+        }),
+        Ok(o) => Ok(ToolResult {
+            metrics: None,
+            success: false,
+            output: format!(
+                "按键失败：{}（需辅助功能权限）",
+                String::from_utf8_lossy(&o.stderr)
+            ),
+        }),
+        Err(e) => Ok(ToolResult {
+            metrics: None,
+            success: false,
+            output: format!("按键失败：{e}"),
+        }),
     }
 }
 
@@ -1242,6 +1656,7 @@ unsafe extern "system" {
         lparam: isize,
     ) -> i32;
     fn IsWindowVisible(h_wnd: isize) -> i32;
+    fn IsWindow(h_wnd: isize) -> i32;
     fn GetWindowTextW(h_wnd: isize, lp_string: *mut u16, n_max_count: i32) -> i32;
     fn GetClassNameW(h_wnd: isize, lp_class_name: *mut u16, n_max_count: i32) -> i32;
     fn GetWindowRect(h_wnd: isize, lp_rect: *mut RECT) -> i32;
@@ -1292,20 +1707,25 @@ fn window_action_windows(title_part: &str, action: &str) -> anyhow::Result<ToolR
     unsafe {
         EnumWindows(Some(enum_window_titles_cb), &windows as *const _ as isize);
     }
-    let guard = windows.lock().map_err(|e| anyhow::anyhow!("{e}"))?;
-    let match_hwnd = guard
-        .iter()
-        .find(|(_, t)| t.to_lowercase().contains(&title_lower))
-        .map(|(h, _)| *h);
-    drop(guard);
+    // 匹配**所有**窗口（多实例场景：不止第一个）——benchmark 发现按标题首窗
+    // 匹配在多实例时只关第一个、且从不复查结果。
+    let matches: Vec<(isize, String)> = {
+        let guard = windows.lock().map_err(|e| anyhow::anyhow!("{e}"))?;
+        guard
+            .iter()
+            .filter(|(_, t)| t.to_lowercase().contains(&title_lower))
+            .cloned()
+            .collect()
+    };
 
-    let Some(hwnd) = match_hwnd else {
+    if matches.is_empty() {
         return Ok(ToolResult {
             metrics: None,
             success: false,
             output: format!("No visible window with title containing '{title_part}'"),
         });
-    };
+    }
+    let hwnd = matches[0].0;
 
     match action {
         "minimize" => {
@@ -1317,11 +1737,36 @@ fn window_action_windows(title_part: &str, action: &str) -> anyhow::Result<ToolR
             })
         }
         "close" => {
-            unsafe { PostMessageW(hwnd, 0x0010, 0, 0) };
+            // 逐个发 WM_CLOSE（多实例全关），随后复查窗口是否真的关闭——
+            // 模态对话框（如记事本保存提示）会拦截 WM_CLOSE，窗口仍在。
+            let mut closed = 0usize;
+            let mut remaining: Vec<String> = Vec::new();
+            for (h, _) in &matches {
+                unsafe { PostMessageW(*h, 0x0010, 0, 0) };
+            }
+            // 给窗口处理消息的时间
+            std::thread::sleep(std::time::Duration::from_millis(350));
+            for (h, title) in &matches {
+                let alive = unsafe { IsWindow(*h) != 0 };
+                if alive {
+                    remaining.push(title.clone());
+                } else {
+                    closed += 1;
+                }
+            }
+            let output = if remaining.is_empty() {
+                format!("Closed {closed} window(s) matching '{title_part}'")
+            } else {
+                format!(
+                    "Closed {closed} window(s); {} still open (可能被模态对话框拦截): {}",
+                    remaining.len(),
+                    remaining.join(" | ")
+                )
+            };
             Ok(ToolResult {
                 metrics: None,
-                success: true,
-                output: format!("Sent close to '{title_part}'"),
+                success: remaining.is_empty(),
+                output,
             })
         }
         "restore" => {

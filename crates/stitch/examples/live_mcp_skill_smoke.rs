@@ -43,8 +43,7 @@ fn scan_local_skills(work_dir: &str) -> Vec<(String, String, String)> {
 
 #[tokio::main]
 async fn main() {
-    let work_dir = std::env::var("STITCH_SMOKE_WORKDIR")
-        .unwrap_or_else(|_| ".".into()); // 默认当前目录，可覆盖
+    let work_dir = std::env::var("STITCH_SMOKE_WORKDIR").unwrap_or_else(|_| ".".into()); // 默认当前目录，可覆盖
 
     println!("== Skill inventory ==");
     println!("work_dir={work_dir}");

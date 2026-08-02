@@ -49,8 +49,9 @@ describe("Compact morph on desktop automation (real exe)", () => {
     await tool.waitForExist({ timeout: 15_000 });
     const toolText = (await tool.getText()) ?? "";
     expect(/^(正在执行|已完成)/.test(toolText)).toBe(true);
-    const elapsed = await $('[data-testid="compact-elapsed"]');
-    await elapsed.waitForExist({ timeout: 5_000 });
+    // 呼吸光晕在跑（无秒表——compact-glow 动画生效）
+    const glow = await $(".compact-bar");
+    await glow.waitForExist({ timeout: 5_000 });
     // Drag region present on the label area.
     const dragRegion = await browser.execute(
       () =>

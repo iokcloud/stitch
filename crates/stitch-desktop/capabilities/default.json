@@ -6,6 +6,7 @@
     "core:default",
     "core:event:default",
     "core:menu:default",
+    "core:window:allow-start-dragging",
     "shell:allow-open",
     "updater:default"
   ]

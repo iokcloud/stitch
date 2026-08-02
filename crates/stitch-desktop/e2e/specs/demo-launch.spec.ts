@@ -50,7 +50,7 @@ describe("Launch demo (real model)", () => {
 
   it("desktop automation task with frame capture", async () => {
     await newSession();
-    await setWorkDir(path.join(__dirname, "../../../test_workspace"));
+    await setWorkDir(path.join(__dirname, "../../../../test_workspace"));
     captureFrame("welcome");
 
     const task =
