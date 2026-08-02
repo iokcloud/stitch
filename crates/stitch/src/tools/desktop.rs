@@ -1115,7 +1115,9 @@ impl DesktopKey {
 fn key_linux(keys: &[String]) -> anyhow::Result<ToolResult> {
     use std::process::Command;
     let combo = keys.join("+");
-    let out = Command::new("xdotool").args(["key", combo.as_str()]).output();
+    let out = Command::new("xdotool")
+        .args(["key", combo.as_str()])
+        .output();
     match out {
         Ok(o) if o.status.success() => Ok(ToolResult {
             metrics: None,
