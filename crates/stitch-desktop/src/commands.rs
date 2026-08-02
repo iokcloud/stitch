@@ -801,7 +801,7 @@ pub(crate) fn open_http_url(url: &str) -> Result<(), String> {
             .arg(url)
             .spawn()
             .map_err(|e| format!("无法打开链接: {e}"))?;
-        return Ok(());
+        Ok(())
     }
     #[cfg(all(unix, not(target_os = "macos")))]
     {
