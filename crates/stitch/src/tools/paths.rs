@@ -168,7 +168,9 @@ mod tests {
 
     #[test]
     fn relative_ok() {
-        let dir = tempfile_dir("stitch-path-ok");
+        // canonicalize 对齐 resolve_under_work_dir 的真实路径（GitHub Actions
+        // runner 的 temp 目录可能是 junction——原始路径 starts_with 会失败）
+        let dir = tempfile_dir("stitch-path-ok").canonicalize().unwrap();
         let p = resolve_under_work_dir(&dir, "src/main.rs").unwrap();
         assert!(p.starts_with(&dir) || is_under(&p, &dir));
         assert!(p.ends_with("main.rs"));
