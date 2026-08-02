@@ -867,7 +867,6 @@ fn window_action_linux(title_part: &str, action: &str) -> anyhow::Result<ToolRes
             && o.status.success()
         {
             done += 1;
-            }
         }
     }
     // close 自查：窗口是否真的关闭
