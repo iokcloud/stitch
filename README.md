@@ -16,8 +16,9 @@
 
 ### 方式一：下载安装包（推荐）
 
-- [Stitch 0.1.6 安装包](https://www.promptstdio.com/downloads/Stitch_0.1.6_x64-setup.exe)（Windows x64 · NSIS）
-- SHA256：`（发布时填写）`
+- [Stitch 0.1.7 安装包](https://www.promptstdio.com/downloads/Stitch_0.1.7_x64-setup.exe)（Windows x64 · NSIS）
+- 绿色版：[Stitch 0.1.7 portable](https://www.promptstdio.com/downloads/Stitch_0.1.7_portable.exe)（单 exe，免安装）
+- SHA256：安装包 `e42569265e800ede6cf657faf3e1ad94ea7d8181cc00b6445ad6c6baddaf0fce` · 绿色版 `d841ed9966bdd2b6e43432650fa59329f3a2adc703717c7420ae50b304c67c33`
 
 首次安装若 Windows 提示「无法识别」，点「更多信息」→「仍要运行」继续即可。可在下载后核对上方校验和。
 
