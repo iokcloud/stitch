@@ -5,8 +5,7 @@
 //!
 //! All APIs are raw Win32 FFI — zero new crate dependencies.
 
-#[cfg(windows)]
-use std::path::PathBuf;
+use std::path::PathBuf; // 跨平台（struct 字段在非 Windows 也使用）
 
 use super::{ToolDef, ToolResult};
 
