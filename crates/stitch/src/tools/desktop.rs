@@ -774,14 +774,6 @@ impl DesktopWindowAction {
             let t0 = std::time::Instant::now();
             window_action_windows(title, action).map(|r| r.with_duration_ms(t0))
         }
-        #[cfg(not(windows))]
-        {
-            Ok(ToolResult {
-                metrics: None,
-                success: false,
-                output: "desktop_window_action is only supported on Windows".into(),
-            })
-        }
         #[cfg(target_os = "linux")]
         {
             let title = arguments["title"]
@@ -1262,14 +1254,6 @@ impl DesktopScroll {
             let capped = amount.clamp(-20, 20);
             let t0 = std::time::Instant::now();
             send_mouse_wheel(capped as i32).map(|r| r.with_duration_ms(t0))
-        }
-        #[cfg(not(windows))]
-        {
-            Ok(ToolResult {
-                metrics: None,
-                success: false,
-                output: "desktop_scroll is only supported on Windows".into(),
-            })
         }
         #[cfg(target_os = "linux")]
         {
@@ -2144,14 +2128,6 @@ impl DesktopHover {
             }
             .with_duration_ms(t0))
         }
-        #[cfg(not(windows))]
-        {
-            Ok(ToolResult {
-                metrics: None,
-                success: false,
-                output: "desktop_hover is only supported on Windows".into(),
-            })
-        }
         #[cfg(target_os = "linux")]
         {
             let x = arguments["x"]
@@ -2309,12 +2285,30 @@ impl DesktopBrowser {
                 .await
                 .map(|r| r.with_duration_ms(t0))
         }
-        #[cfg(not(windows))]
+        #[cfg(target_os = "linux")]
+        {
+            let _ = arguments;
+            Ok(ToolResult {
+                metrics: None,
+                success: false,
+                output: "desktop_browser is not supported on Linux yet".into(),
+            })
+        }
+        #[cfg(target_os = "macos")]
+        {
+            let _ = arguments;
+            Ok(ToolResult {
+                metrics: None,
+                success: false,
+                output: "desktop_browser is not supported on macOS yet".into(),
+            })
+        }
+        #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
         {
             Ok(ToolResult {
                 metrics: None,
                 success: false,
-                output: "desktop_browser is only supported on Windows".into(),
+                output: "desktop_browser is only supported on Windows/macOS/Linux".into(),
             })
         }
     }
@@ -2799,14 +2793,6 @@ impl DesktopAppLaunch {
                 })
                 .unwrap_or_default();
             launch_app_windows(app, &args)
-        }
-        #[cfg(not(windows))]
-        {
-            Ok(ToolResult {
-                metrics: None,
-                success: false,
-                output: "desktop_app_launch is only supported on Windows".into(),
-            })
         }
         #[cfg(target_os = "linux")]
         {
