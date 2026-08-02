@@ -3574,7 +3574,7 @@ mod compact_animation_tests {
             (400.0, 500.0, 420.0, 64.0),
             false,
         );
-        assert_eq!(steps.len(), 6);
+        assert_eq!(steps.len(), 12); // STEPS 常量（窗口变形动画已弃用但逻辑保留）
         let sizes: Vec<f64> = steps.iter().map(|s| s.width).collect();
         let positions: Vec<f64> = steps.iter().map(|s| s.x).collect();
         // 单调逼近目标：尺寸递减、x 递增，终点精确命中。
