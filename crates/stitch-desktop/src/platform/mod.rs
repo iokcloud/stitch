@@ -101,7 +101,7 @@ pub fn finish_splash_and_show(
         return Ok(());
     }
     if let Some(window) = app.get_webview_window("main") {
-        let _ = (dark, window);
+        let _ = dark;
         window.show().map_err(|e| e.to_string())?;
     }
     Ok(())
