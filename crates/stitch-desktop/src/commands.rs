@@ -809,7 +809,7 @@ pub(crate) fn open_http_url(url: &str) -> Result<(), String> {
             .arg(url)
             .spawn()
             .map_err(|e| format!("无法打开链接: {e}"))?;
-        return Ok(());
+        Ok(())
     }
     #[cfg(not(any(windows, unix)))]
     {
@@ -1812,7 +1812,7 @@ pub fn open_folder_path(path: String) -> Result<(), String> {
             .arg(&shown)
             .spawn()
             .map_err(|e| format!("无法打开文件夹: {e}"))?;
-        return Ok(());
+        Ok(())
     }
     #[cfg(all(unix, not(target_os = "macos")))]
     {
@@ -1820,7 +1820,7 @@ pub fn open_folder_path(path: String) -> Result<(), String> {
             .arg(&shown)
             .spawn()
             .map_err(|e| format!("无法打开文件夹: {e}"))?;
-        return Ok(());
+        Ok(())
     }
     #[cfg(not(any(windows, unix)))]
     {
