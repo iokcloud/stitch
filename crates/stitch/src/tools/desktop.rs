@@ -354,8 +354,9 @@ fn click_linux(x: i64, y: i64, button: &str) -> anyhow::Result<ToolResult> {
         "middle" => "2",
         _ => "1",
     };
+    let (xs, ys) = (x.to_string(), y.to_string());
     let ok = Command::new("xdotool")
-        .args(["mousemove", &x.to_string(), &y.to_string(), "click", btn])
+        .args(["mousemove", xs.as_str(), ys.as_str(), "click", btn])
         .status();
     match ok {
         Ok(st) if st.success() => Ok(ToolResult {
@@ -860,7 +861,7 @@ fn window_action_linux(title_part: &str, action: &str) -> anyhow::Result<ToolRes
         }
     };
     let mut done = 0usize;
-    for id in &id_list {
+    for id in id_list {
         let r = Command::new("xdotool").args([sub, id]).output();
         if let Ok(o) = r {
             if o.status.success() {
@@ -1114,7 +1115,7 @@ impl DesktopKey {
 fn key_linux(keys: &[String]) -> anyhow::Result<ToolResult> {
     use std::process::Command;
     let combo = keys.join("+");
-    let out = Command::new("xdotool").args(["key", &combo]).output();
+    let out = Command::new("xdotool").args(["key", combo.as_str()]).output();
     match out {
         Ok(o) if o.status.success() => Ok(ToolResult {
             metrics: None,
@@ -2168,8 +2169,9 @@ impl DesktopHover {
 #[cfg(target_os = "linux")]
 fn hover_linux(x: i64, y: i64) -> anyhow::Result<ToolResult> {
     use std::process::Command;
+    let (xs, ys) = (x.to_string(), y.to_string());
     let out = Command::new("xdotool")
-        .args(["mousemove", &x.to_string(), &y.to_string()])
+        .args(["mousemove", xs.as_str(), ys.as_str()])
         .output();
     match out {
         Ok(o) if o.status.success() => Ok(ToolResult {
