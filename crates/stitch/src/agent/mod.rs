@@ -119,6 +119,7 @@ pub enum AgentEvent {
 ///
 /// `work_dir` / `allow_rules` feed the confirm gate (outside-workspace reads
 /// and persisted allow rules). Ignored when `skip_confirm` is set.
+#[allow(clippy::too_many_arguments)]
 pub async fn run_react(
     session: &mut Session,
     api_base: &str,

@@ -219,7 +219,7 @@ fn screenshot_macos(output_dir: &std::path::PathBuf, ocr: bool) -> anyhow::Resul
 }
 
 #[cfg(windows)]
-fn screenshot_windows(output_dir: &PathBuf, ocr: bool) -> anyhow::Result<ToolResult> {
+fn screenshot_windows(output_dir: &std::path::Path, ocr: bool) -> anyhow::Result<ToolResult> {
     let t0 = std::time::Instant::now();
     let screen_w = unsafe { GetSystemMetrics(0) }; // SM_CXSCREEN
     let screen_h = unsafe { GetSystemMetrics(1) }; // SM_CYSCREEN
@@ -428,11 +428,11 @@ fn click_windows(x: i64, y: i64, button: &str) -> anyhow::Result<ToolResult> {
         let mut metrics = std::collections::HashMap::new();
         metrics.insert("duration_ms".into(), t0.elapsed().as_secs_f64() * 1000.0);
 
-        return Ok(ToolResult {
+        Ok(ToolResult {
             success: true,
             output: format!("Clicked ({}, {}) with {} button{}", x, y, button, pos_info),
             metrics: Some(metrics),
-        });
+        })
     }
 }
 
@@ -1610,6 +1610,7 @@ fn ocr_from_bmp(path: &std::path::Path) -> anyhow::Result<OcrOutput> {
 // ═══════════════════════════════════════════════════════════════
 
 #[cfg(windows)]
+#[allow(clippy::upper_case_acronyms)] // Win32 类型名
 #[repr(C)]
 struct RECT {
     left: i32,
@@ -1619,6 +1620,7 @@ struct RECT {
 }
 
 #[cfg(windows)]
+#[allow(clippy::upper_case_acronyms)] // Win32 类型名
 #[repr(C)]
 struct POINT {
     x: i32,
@@ -1661,12 +1663,12 @@ unsafe fn capture_screen_gdi(w: i32, h: i32) -> anyhow::Result<Vec<u8>> {
         }
         return Err(anyhow::anyhow!("CreateCompatibleBitmap failed"));
     }
-    let old_bm = unsafe { SelectObject(hdc_mem, hbm as isize) };
+    let old_bm = unsafe { SelectObject(hdc_mem, hbm) };
     let blt_ok = unsafe { BitBlt(hdc_mem, 0, 0, w, h, hdc_screen, 0, 0, 0x00CC0020) };
     if blt_ok == 0 {
         unsafe {
             SelectObject(hdc_mem, old_bm);
-            DeleteObject(hbm as isize);
+            DeleteObject(hbm);
             DeleteDC(hdc_mem);
             ReleaseDC(0, hdc_screen);
         }
@@ -1697,7 +1699,7 @@ unsafe fn capture_screen_gdi(w: i32, h: i32) -> anyhow::Result<Vec<u8>> {
     // Cleanup
     unsafe {
         SelectObject(hdc_mem, old_bm);
-        DeleteObject(hbm as isize);
+        DeleteObject(hbm);
         DeleteDC(hdc_mem);
         ReleaseDC(0, hdc_screen);
     }
@@ -1713,7 +1715,7 @@ unsafe fn capture_screen_gdi(w: i32, h: i32) -> anyhow::Result<Vec<u8>> {
 fn write_bmp(path: &std::path::Path, w: u32, h: u32, pixels: &[u8]) -> anyhow::Result<()> {
     use std::io::Write;
 
-    let row_size = ((w * 32 + 31) / 32) * 4;
+    let row_size = (w * 32).div_ceil(32) * 4;
     let img_size = row_size * h;
     let file_size = 14 + 40 + img_size;
 
@@ -1749,6 +1751,7 @@ fn write_bmp(path: &std::path::Path, w: u32, h: u32, pixels: &[u8]) -> anyhow::R
 // ═══════════════════════════════════════════════════════════════
 
 #[cfg(windows)]
+#[allow(clippy::upper_case_acronyms)] // Win32 类型名
 #[repr(C)]
 struct MOUSEINPUT {
     dx: i32,
@@ -1760,6 +1763,7 @@ struct MOUSEINPUT {
 }
 
 #[cfg(windows)]
+#[allow(clippy::upper_case_acronyms)] // Win32 类型名
 #[repr(C)]
 struct KEYBDINPUT {
     w_vk: u16,
@@ -1777,6 +1781,7 @@ union INPUT_DATA {
 }
 
 #[cfg(windows)]
+#[allow(clippy::upper_case_acronyms)] // Win32 类型名
 #[repr(C)]
 struct INPUT {
     r#type: u32,
@@ -1898,6 +1903,7 @@ unsafe fn send_key_char(ch: char) -> anyhow::Result<()> {
 // ═══════════════════════════════════════════════════════════════
 
 #[cfg(windows)]
+#[allow(clippy::upper_case_acronyms)] // Win32 类型名遵循系统命名（RECT/INPUT/POINT…）
 unsafe extern "system" {
     // Screen
     fn GetSystemMetrics(n_index: i32) -> i32;

@@ -30,6 +30,7 @@ const DESCRIBE_PROMPT: &str =
     "用中文简要描述这张图片，供无视觉的对话模型理解。只说事实，不超过 80 字。";
 
 /// Describe one image (data URL) via an OpenAI-compatible local endpoint.
+#[allow(clippy::disallowed_methods)]
 pub async fn describe_image(
     api_base: &str,
     model: &str,

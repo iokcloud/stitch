@@ -77,6 +77,7 @@ impl SoftCompactState {
     }
 
     /// Spawn LLM soft condensation on a **clone** of messages; never touches live Session.
+    #[allow(clippy::too_many_arguments)]
     pub fn try_spawn(
         &self,
         messages: Vec<Message>,
@@ -104,6 +105,7 @@ impl SoftCompactState {
                 if cancel.load(Ordering::SeqCst) {
                     return None;
                 }
+                #[allow(clippy::question_mark)] // 类型结构不适用 ?（Option<tuple> 上下文）
                 let Some((_keep, draft)) = plan_compact_messages(&messages, &cfg) else {
                     return None;
                 };

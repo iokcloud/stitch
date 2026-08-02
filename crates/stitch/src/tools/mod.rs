@@ -372,11 +372,13 @@ impl Tool {
 
     /// If this call is a read that resolves outside `work_dir`, returns the
     /// resolved target — the exact scope the user would authorize.
+    #[allow(clippy::match_like_matches_macro)]
     pub fn scoped_read_target(
         &self,
         args: &serde_json::Value,
         work_dir: Option<&str>,
     ) -> Option<std::path::PathBuf> {
+        #[allow(clippy::question_mark)] // 类型结构不适用 ?
         let Some(wd) = work_dir.map(str::trim).filter(|s| !s.is_empty()) else {
             return None;
         };
@@ -391,16 +393,17 @@ impl Tool {
     /// 1. a persisted allow rule matches → no;
     /// 2. inherently dangerous tools (writes / commands / platform) → yes;
     /// 3. reads resolving outside the workspace → yes (scope authorization).
+    #[allow(clippy::match_like_matches_macro)]
     pub fn needs_confirmation(
         &self,
         args: &serde_json::Value,
         work_dir: Option<&str>,
         rules: Option<&crate::allow::AllowRules>,
     ) -> bool {
-        if let Some((scope, value)) = self.allow_scope(args) {
-            if rules.is_some_and(|r| r.matches(&self.name(), &scope, &value)) {
-                return false;
-            }
+        if let Some((scope, value)) = self.allow_scope(args)
+            && rules.is_some_and(|r| r.matches(self.name(), &scope, &value))
+        {
+            return false;
         }
         if self.requires_confirmation() {
             return true;

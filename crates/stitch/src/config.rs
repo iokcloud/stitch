@@ -315,10 +315,8 @@ impl StitchConfig {
             // `directories` extra `config/` segment). Pull Token so red-dots clear.
             dirty |= cfg.migrate_legacy_provision_token();
             // Persist alias → V4 rewrite / profile seed so desktop settings stay current.
-            if dirty {
-                if let Err(e) = cfg.save() {
-                    tracing::warn!(error = %e, "failed to persist migrated config");
-                }
+            if dirty && let Err(e) = cfg.save() {
+                tracing::warn!(error = %e, "failed to persist migrated config");
             }
             Ok(cfg)
         } else if let Some(legacy) = load_raw_config_file(&legacy_config_path()) {
@@ -527,15 +525,14 @@ impl StitchConfig {
         if let Some(next) = migrate_llm_api_base(&profile.api_base) {
             profile.api_base = next.to_string();
         }
-        if let Some(existing) = self.llm_profiles.iter().find(|p| p.id == profile.id) {
-            if profile
+        if let Some(existing) = self.llm_profiles.iter().find(|p| p.id == profile.id)
+            && profile
                 .api_key
                 .as_deref()
                 .map(|k| k.trim().is_empty())
                 .unwrap_or(true)
-            {
-                profile.api_key = existing.api_key.clone();
-            }
+        {
+            profile.api_key = existing.api_key.clone();
         }
         if let Some(slot) = self.llm_profiles.iter_mut().find(|p| p.id == profile.id) {
             *slot = profile.clone();
@@ -632,15 +629,14 @@ impl StitchConfig {
         } else {
             base.to_string()
         };
-        if let Some(existing) = self.mcp_profiles.iter().find(|p| p.id == profile.id) {
-            if profile
+        if let Some(existing) = self.mcp_profiles.iter().find(|p| p.id == profile.id)
+            && profile
                 .api_token
                 .as_deref()
                 .map(|k| k.trim().is_empty())
                 .unwrap_or(true)
-            {
-                profile.api_token = existing.api_token.clone();
-            }
+        {
+            profile.api_token = existing.api_token.clone();
         }
         if let Some(slot) = self.mcp_profiles.iter_mut().find(|p| p.id == profile.id) {
             *slot = profile.clone();
@@ -773,25 +769,25 @@ impl StitchConfig {
 
     /// Resolve PromptStdio credentials without mutating active fields.
     pub fn resolve_mcp(&self, profile_id: Option<&str>) -> anyhow::Result<ResolvedMcp> {
-        if let Some(pid) = profile_id.map(|s| s.trim()).filter(|s| !s.is_empty()) {
-            if let Some(p) = self.mcp_profiles.iter().find(|p| p.id == pid) {
-                let token = p
-                    .api_token
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|k| !k.is_empty())
-                    .ok_or_else(|| {
-                        anyhow::anyhow!(
-                            "账号配置「{}」未设置 Token。请在设置中补全。",
-                            if p.label.is_empty() { &p.id } else { &p.label }
-                        )
-                    })?;
-                return Ok(ResolvedMcp {
-                    profile_id: Some(p.id.clone()),
-                    api_base: p.api_base.clone(),
-                    api_token: token.to_string(),
-                });
-            }
+        if let Some(pid) = profile_id.map(|s| s.trim()).filter(|s| !s.is_empty())
+            && let Some(p) = self.mcp_profiles.iter().find(|p| p.id == pid)
+        {
+            let token = p
+                .api_token
+                .as_deref()
+                .map(str::trim)
+                .filter(|k| !k.is_empty())
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "账号配置「{}」未设置 Token。请在设置中补全。",
+                        if p.label.is_empty() { &p.id } else { &p.label }
+                    )
+                })?;
+            return Ok(ResolvedMcp {
+                profile_id: Some(p.id.clone()),
+                api_base: p.api_base.clone(),
+                api_token: token.to_string(),
+            });
         }
         let token = self
             .api_token
@@ -846,30 +842,30 @@ impl StitchConfig {
             .filter(|m| !m.is_empty())
             .map(|m| migrate_llm_model(m).unwrap_or(m).to_string());
 
-        if let Some(pid) = profile_id.map(|s| s.trim()).filter(|s| !s.is_empty()) {
-            if let Some(p) = self.llm_profiles.iter().find(|p| p.id == pid) {
-                let key = p
-                    .api_key
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|k| !k.is_empty())
-                    .ok_or_else(|| {
-                        anyhow::anyhow!(
-                            "模型配置「{}」未设置 API Key。请在设置中补全密钥。",
-                            if p.label.is_empty() { &p.id } else { &p.label }
-                        )
-                    })?;
-                let model = model_override.unwrap_or_else(|| p.model.clone());
-                return Ok(ResolvedLlm {
-                    profile_id: Some(p.id.clone()),
-                    provider: p.provider.clone(),
-                    api_base: p.api_base.clone(),
-                    api_key: key.to_string(),
-                    model,
-                });
-            }
-            // Unknown id → fall through to flat fields.
+        if let Some(pid) = profile_id.map(|s| s.trim()).filter(|s| !s.is_empty())
+            && let Some(p) = self.llm_profiles.iter().find(|p| p.id == pid)
+        {
+            let key = p
+                .api_key
+                .as_deref()
+                .map(str::trim)
+                .filter(|k| !k.is_empty())
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "模型配置「{}」未设置 API Key。请在设置中补全密钥。",
+                        if p.label.is_empty() { &p.id } else { &p.label }
+                    )
+                })?;
+            let model = model_override.unwrap_or_else(|| p.model.clone());
+            return Ok(ResolvedLlm {
+                profile_id: Some(p.id.clone()),
+                provider: p.provider.clone(),
+                api_base: p.api_base.clone(),
+                api_key: key.to_string(),
+                model,
+            });
         }
+        // Unknown id → fall through to flat fields.
 
         let key = self.require_llm_key()?.to_string();
         let model = model_override.unwrap_or_else(|| self.llm_model.clone());
