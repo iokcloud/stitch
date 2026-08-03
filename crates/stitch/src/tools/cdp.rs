@@ -85,6 +85,12 @@ impl CdpClient {
     ///
     /// `debug_port` is typically 9222.
     /// `prefer_url` — if provided, prefer the page whose URL contains this.
+    /// 共享 HTTP client（CDP 发现/连接复用）。
+    fn shared_http_client() -> &'static reqwest::Client {
+        static CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+        CLIENT.get_or_init(|| reqwest::Client::new())
+    }
+
     pub async fn connect(debug_port: u16, prefer_url: Option<&str>) -> anyhow::Result<Self> {
         // Auto-launch Chrome if needed
         ensure_chrome_debug(debug_port).await?;
@@ -92,7 +98,7 @@ impl CdpClient {
         let base = format!("http://localhost:{debug_port}");
         let list_url = format!("{base}/json");
 
-        let client = reqwest::Client::new();
+        let client = Self::shared_http_client();
         let resp = client.get(&list_url).send().await.with_context(|| {
             format!(
                 "Cannot reach Chrome DevTools at {list_url}. \

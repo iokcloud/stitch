@@ -3094,7 +3094,7 @@ body {
 }
 .session-busy {
     display: inline-flex;
-    color: var(--color-muted);
+    color: var(--color-brand-accent);
     animation: session-spin 0.9s linear infinite;
 }
 @keyframes session-spin {
@@ -4610,4 +4610,36 @@ kbd {
 .compact-morph-logo.morph-play {
   opacity: 1;
   transform: translate(-50%, -50%) scale(1);
+}
+
+/* 流式打字光标：回复生成中末尾脉冲竖条（ChatGPT/Claude 式「正在生成」感知） */
+.stream-caret {
+  display: inline-block;
+  width: 2px;
+  height: 1em;
+  margin-left: 2px;
+  vertical-align: text-bottom;
+  background: var(--color-brand-accent);
+  border-radius: 1px;
+  animation: stream-caret-blink 1s steps(2) infinite;
+}
+@keyframes stream-caret-blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.25;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .stream-caret {
+    animation: none;
+  }
+}
+
+/* 窗口失焦态：顶栏降档（主流工具行为——失焦时 chrome 退让，让焦点窗口一目了然） */
+[data-window-focused="false"] [data-testid="chat-topbar"] {
+  opacity: 0.62;
+  transition: opacity 160ms ease;
 }

@@ -26,21 +26,6 @@ pub enum StreamEvent {
 }
 
 /// Provider name.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Provider {
-    OpenAI,
-}
-
-impl Provider {
-    /// Create a Provider from a lowercase name string.
-    pub fn from_name(s: &str) -> Self {
-        match s.to_lowercase().as_str() {
-            "openai" => Self::OpenAI,
-            _ => Self::OpenAI,
-        }
-    }
-}
-
 /// Configuration for an LLM request.
 #[derive(Debug, Clone)]
 pub struct LlmRequest {
@@ -129,6 +114,18 @@ use serde::{Deserialize, Serialize};
 /// SSE parsing, and tool call accumulation, emitting `StreamEvent`s
 /// through the provided channel. Retries transient network errors
 /// up to 2 times.
+/// 共享 HTTP client（连接池/TLS 会话复用——ReAct 每迭代至少一次
+/// LLM 调用，逐次 Client::new() 会丢全部连接复用）。
+fn shared_http_client() -> &'static reqwest::Client {
+    static CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+    CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(15))
+            .build()
+            .expect("http client build")
+    })
+}
+
 pub async fn stream_chat(
     request: LlmRequest,
     tx: tokio::sync::mpsc::UnboundedSender<StreamEvent>,
@@ -155,7 +152,7 @@ pub async fn stream_chat(
     // Retry transient network errors up to 2 times
     let max_retries: u32 = 2;
     let mut last_error = None;
-    let client = reqwest::Client::new();
+    let client = shared_http_client();
     for attempt in 0..=max_retries {
         if attempt > 0 {
             tracing::warn!(attempt, "retrying after transient error");
@@ -218,7 +215,7 @@ pub async fn complete_chat(request: LlmRequest) -> anyhow::Result<String> {
         thinking,
     };
 
-    let client = reqwest::Client::new();
+    let client = shared_http_client();
     let response = client
         .post(&url)
         .header("Authorization", format!("Bearer {}", request.api_key))
