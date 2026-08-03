@@ -139,10 +139,6 @@ impl Content {
 
     /// Lossy text for write-back paths that only ever carry plain text
     /// (tool-message externalization); images are dropped.
-    pub fn into_string_lossy(self) -> String {
-        self.text().to_string()
-    }
-
     /// Remove image parts for the on-disk copy (lightweight backend: image
     /// data URLs never persist). Text survives as-is; an image-only message
     /// becomes the `[图片]` stub, so the disk stays plain-text wire format.

@@ -453,12 +453,12 @@ impl StitchConfig {
 
     /// If `llm_profiles` is empty, seed one profile from flat `llm_*` fields.
     /// Returns `true` if the in-memory config changed.
+    /// If `llm_profiles` is empty, seed one profile from flat `llm_*` fields.
+    /// Returns `true` if the in-memory config changed.
     pub fn ensure_llm_profiles_seeded(&mut self) -> bool {
         self.ensure_profiles_seeded()
     }
 
-    /// If `llm_profiles` is empty, seed one profile from flat `llm_*` fields.
-    /// Returns `true` if the in-memory config changed.
     pub fn ensure_profiles_seeded(&mut self) -> bool {
         if !self.llm_profiles.is_empty() {
             // Keep active id valid when possible.

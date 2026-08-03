@@ -175,11 +175,27 @@ pub fn build_system_prompt_with_context(
              - **Navigating**: prefer desktop_key shortcuts (ctrl+l for address bar, \
              ctrl+t for new tab, tab to move focus, enter to confirm) over blind clicking.\n\
              - **Scrolling**: use desktop_scroll to browse long pages.\n\
+             - **Keyboard input goes to the foreground window only**: desktop_type and \
+             desktop_key affect whatever window currently has focus. Before typing, confirm \
+             the target window is on top — use desktop_window_action focus on it (or minimize \
+             covering windows), then verify with a screenshot. After launching an app, check \
+             it actually came to the foreground; the tool output reports the foreground window \
+             title after each type/key, so watch it.\n\
+             - **Window titles depend on the OS locale**: a notepad window may be titled \
+             \"记事本\" (Chinese) or \"Notepad\"/\"Untitled - Notepad\" (English). Always read \
+             the ACTUAL title from desktop_window_list and match on the real text — never \
+             assume a fixed name.\n\
              - **Window management**: desktop_window_action supports minimize, close, \
              restore, maximize, and focus. Minimize, don't close, windows you may need later.\n\
+             - **Closing windows**: after a close, ALWAYS call desktop_window_list to verify \
+             the window is really gone. If it remains, the close was blocked by a modal dialog \
+             (e.g. an unsaved-changes prompt) — do not give up: screenshot it (ocr=true), \
+             dismiss the dialog (press the 'Don't Save' / 不保存 button via keyboard or click, \
+             or Esc), then retry the close and verify again. The user asked to close the \
+             window, so discarding unsaved changes is intended.\n\
              - **Be autonomous**: don't ask permission to minimize overlapping windows. \
              If a window blocks your view of the target, minimize it immediately.\n\
-             - **Verify after each action**: take a screenshot to confirm the result.\n",
+             - **Verify after each action**: take a screenshot or window list to confirm the result.\n",
         );
     }
 

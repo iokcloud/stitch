@@ -1,11 +1,11 @@
 {
-  "version": "0.1.3",
+  "version": "0.2.0",
   "notes": "e2e fake update — do not use for install",
   "pub_date": "2026-07-26T12:00:00Z",
   "platforms": {
     "windows-x86_64": {
       "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IGZha2Utc2lnLWZvci1kaXNjb3Zlci1vbmx5Cg==",
-      "url": "http://127.0.0.1:18765/Stitch_0.1.3_x64-setup.exe"
+      "url": "http://127.0.0.1:18765/Stitch_0.2.0_x64-setup.exe"
     }
   }
 }
