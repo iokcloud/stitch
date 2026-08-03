@@ -354,21 +354,6 @@ body {
     color: var(--color-foreground);
 }
 
-.plan-toggle {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.4rem;
-    height: 1.75rem;
-    padding: 0 0.65rem;
-    border: 1px solid var(--color-chip-border);
-    border-radius: 999px;
-    background: var(--color-chip);
-    color: var(--color-muted);
-    font-size: 11px;
-    font-weight: 500;
-    cursor: pointer;
-    user-select: none;
-}
 .plan-toggle:has(input:checked) {
     border-color: var(--color-brand-accent);
     color: var(--color-brand-accent);
@@ -889,10 +874,12 @@ body {
     gap: 0.35rem;
     margin: 0.55rem 0.85rem 0;
     padding: 0.5rem 0.7rem 0.45rem;
-    border: 1px solid var(--color-border-strong);
-    border-bottom: 0;
-    border-radius: var(--radius-md) var(--radius-md) 0 0;
-    background: var(--color-rail);
+    /* 融入输入区：去独立卡片边框/背景——只用分隔线衔接 composer，
+       与下方输入区形成一体（用户反馈「没有整体感」） */
+    border: none;
+    border-bottom: 1px solid var(--color-border);
+    border-radius: 0;
+    background: transparent;
     font-size: 11px;
     color: var(--color-foreground-secondary);
     animation: message-in 160ms ease;
@@ -908,7 +895,7 @@ body {
     height: 6px;
     border-radius: 50%;
     background: var(--color-brand-accent);
-    animation: pulse-dot 1.2s ease-in-out infinite;
+    /* 静态点——脉冲特效只在录制状态出现（用户反馈执行中脉冲不适） */
     flex-shrink: 0;
 }
 .stream-rail-label {
@@ -1167,7 +1154,6 @@ body {
     height: 6px;
     border-radius: 50%;
     background: var(--color-brand-accent);
-    animation: pulse-dot 1.2s ease-in-out infinite;
 }
 
 /* Global toasts — background-session events and recoverable errors. */
@@ -1867,6 +1853,9 @@ body {
     max-height: 320px;
     overflow: hidden;
     padding: 0.35rem 0.65rem 0;
+    /* 底部渐变淡出——硬截断会显得突兀（用户反馈「折叠方式怪」） */
+    -webkit-mask-image: linear-gradient(to bottom, #000 82%, transparent 100%);
+    mask-image: linear-gradient(to bottom, #000 82%, transparent 100%);
 }
 .message-user .message-clamp {
     padding: 0;
@@ -1903,6 +1892,11 @@ body {
 }
 .message-expand:hover {
     text-decoration: underline;
+}
+/* 展开态 chevron 翻转（收起=向上箭头）。不用 Tailwind class: 指令——
+ * class:rotate-180 会被 Tailwind 解析成「class 变体」丢弃（PITFALLS S-018）。 */
+.message-expand.is-open svg {
+    transform: rotate(180deg);
 }
 /* Long-message foot: whole bar is the hit target; chevron is indicator only */
 .message-clamp-bar .message-expand {
@@ -3354,7 +3348,7 @@ body {
 /* Composer: one surface so input + send share a baseline */
 .composer-row {
     display: flex;
-    align-items: flex-end;
+    align-items: center;
     gap: 0.45rem;
     padding: 0.75rem 0.85rem 0.35rem;
 }
@@ -3833,26 +3827,6 @@ body {
     color: var(--color-muted);
 }
 
-.record-toggle {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-    flex-shrink: 0;
-    padding: 0.35rem 0.55rem;
-    margin-bottom: 0.35rem;
-    border-radius: 8px;
-    border: 1px solid var(--color-border);
-    background: var(--color-surface);
-    color: var(--color-muted);
-    cursor: pointer;
-    font-size: 12px;
-    line-height: 1.2;
-    white-space: nowrap;
-    transition:
-        background 0.2s,
-        border-color 0.2s,
-        color 0.2s;
-}
 .record-toggle:hover {
     color: var(--color-foreground);
     border-color: var(--color-border-strong);
@@ -3866,14 +3840,6 @@ body {
     background: rgba(220, 38, 38, 0.15);
     border-color: rgba(252, 165, 165, 0.35);
     color: #fca5a5;
-}
-.record-dot,
-.tool-record-dot {
-    width: 7px;
-    height: 7px;
-    border-radius: 50%;
-    background: #dc2626;
-    animation: record-pulse 1.5s infinite;
 }
 .tool-record-dot {
     flex-shrink: 0;
@@ -4180,12 +4146,6 @@ body {
     margin-top: 0.2em;
 }
 
-.streaming-cursor::after {
-    content: "|";
-    animation: blink 800ms step-end infinite;
-    color: var(--color-brand-accent);
-    margin-left: 1px;
-}
 
 kbd {
     font-family: var(--font-mono);
@@ -4317,8 +4277,10 @@ kbd {
     compact-glow 2.4s ease-in-out 0.18s infinite;
 }
 @keyframes compact-fade {
-  from { opacity: 0; transform: translateY(4px); }
-  to { opacity: 1; transform: none; }
+  /* 弹性入场：轻微下落越过再落定（ease-out-back 手写关键帧） */
+  0% { opacity: 0; transform: translateY(6px) scale(0.97); }
+  60% { opacity: 1; transform: translateY(-2px) scale(1.012); }
+  100% { opacity: 1; transform: translateY(0) scale(1); }
 }
 /* Drag handle region: spinner + label, so the bar can be parked anywhere. */
 .compact-bar .compact-drag {
@@ -4349,7 +4311,7 @@ kbd {
   inset: -4px;
   border-radius: 50%;
   border: 2px solid color-mix(in srgb, var(--color-brand-accent) 35%, transparent);
-  animation: compact-breathe 2.4s ease-out infinite;
+  /* 无脉冲动画——用户反馈状态区脉冲不适 */
 }
 @keyframes compact-breathe {
   0% { transform: scale(0.6); opacity: 0.95; }
@@ -4357,16 +4319,45 @@ kbd {
   100% { transform: scale(1.45); opacity: 0; }
 }
 .compact-bar .compact-spinner {
-  width: 16px;
-  height: 16px;
-  border: 2px solid var(--color-muted);
-  border-top-color: var(--color-brand-accent);
+  position: relative;
+  width: 12px;
+  height: 12px;
   border-radius: 50%;
-  animation: compact-spin 0.8s linear infinite;
+  background: var(--color-brand-accent);
+  /* 柔和呼吸（明暗+缩放循环——非硬脉冲非旋转，类似呼吸灯） */
+  animation: compact-breathe-dot 2s ease-in-out infinite;
   flex-shrink: 0;
+  margin: 0 3px;
 }
-@keyframes compact-spin {
-  to { transform: rotate(360deg); }
+/* 外圈扩散光环——定位/雷达感，与圆点呼吸同节奏错开 */
+.compact-bar .compact-spinner::after {
+  content: "";
+  position: absolute;
+  inset: -5px;
+  border-radius: 50%;
+  border: 2.5px solid color-mix(in srgb, var(--color-brand-accent) 60%, transparent);
+  animation: compact-halo 2.2s ease-out infinite;
+}
+@keyframes compact-halo {
+  0% {
+    transform: scale(0.8);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(2.2);
+    opacity: 0;
+  }
+}
+@keyframes compact-breathe-dot {
+  0%,
+  100% {
+    opacity: 0.5;
+    transform: scale(0.88);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.1);
+  }
 }
 .compact-bar .compact-text {
   overflow: hidden;
@@ -4391,15 +4382,24 @@ kbd {
   flex-shrink: 0;
   animation: compact-fade 0.18s ease-out;
 }
-/* Manual (pinned) idle state: static dot, nothing animating. */
+/* Manual (pinned) idle state: 柔和呼吸（极弱——仅明暗，无缩放） */
 .compact-bar .compact-idle {
   width: 8px;
   height: 8px;
   border-radius: 50%;
   background: var(--color-brand-accent);
-  opacity: 0.55;
+  animation: compact-idle-breathe 3.2s ease-in-out infinite;
   flex-shrink: 0;
   margin: 0 5px;
+}
+@keyframes compact-idle-breathe {
+  0%,
+  100% {
+    opacity: 0.4;
+  }
+  50% {
+    opacity: 0.8;
+  }
 }
 .compact-bar .compact-expand,
 .compact-bar .compact-stop {
@@ -4594,23 +4594,6 @@ kbd {
 }
 
 /* 形态切换的「变幻感」：品牌 logo 闪现过渡（toggleWithMorph 播放 morph-play） */
-.compact-morph-logo {
-  position: fixed;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%) scale(0.78);
-  opacity: 0;
-  pointer-events: none;
-  z-index: 9999;
-  transition:
-    opacity 0.16s ease-out,
-    transform 0.24s cubic-bezier(0.34, 1.35, 0.64, 1);
-  filter: drop-shadow(0 6px 18px color-mix(in srgb, var(--color-shadow, #000000) 30%, transparent));
-}
-.compact-morph-logo.morph-play {
-  opacity: 1;
-  transform: translate(-50%, -50%) scale(1);
-}
 
 /* 流式打字光标：回复生成中末尾脉冲竖条（ChatGPT/Claude 式「正在生成」感知） */
 .stream-caret {

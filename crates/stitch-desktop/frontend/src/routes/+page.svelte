@@ -28,10 +28,6 @@
     clearConfirmSessionAllow,
     skillRecording,
     skillRecordSteps,
-    isStreaming,
-    streamingContent,
-    streamingBubbleId,
-    streamSessionId,
     lastSendSource,
     toggleSidebar,
     autoContinueEnabled,
@@ -43,6 +39,8 @@
   import { diag, diagError, installGlobalDiagHandlers } from "$lib/diag";
   import { formatElapsed } from "$lib/output-format";
   import { compact, compactLabel } from "$lib/stores/compact.svelte";
+import { AUTO_CONTINUE_DELAY_MS, REVEAL_SAFETY_MS, WINDOW_PERSIST_DEBOUNCE_MS } from "$lib/timing";
+import { stream } from "$lib/stores/stream.svelte";
   import {
     ensureSession,
     ensureSessionLlm,
@@ -68,6 +66,7 @@
   import type { PlanStep } from "$lib/types";
   import { initTheme, theme } from "$lib/stores/theme";
   import { installNativeContextMenu } from "$lib/native-context-menu";
+import { terminalOpen, toggleTerminal } from "$lib/terminal/store";
   import {
     finishStartup,
     clearTaskbarProgress,
@@ -131,7 +130,7 @@
     persistTimer = setTimeout(() => {
       persistTimer = null;
       void saveWindowState(maximizedState).catch(() => {});
-    }, 400);
+    }, WINDOW_PERSIST_DEBOUNCE_MS);
   }
 
   function installWindowStatePersistence() {
@@ -144,6 +143,7 @@
     let unlistenResize: (() => void) | undefined;
     let unlistenMove: (() => void) | undefined;
     let unlistenClose: (() => void) | undefined;
+    let unlistenFocus: (() => void) | undefined;
     let disposed = false;
 
     void (async () => {
@@ -172,12 +172,19 @@
           snapTimer = setTimeout(() => {
             snapTimer = null;
             void snapCompactWindow().catch(() => {});
-          }, 400);
+          }, WINDOW_PERSIST_DEBOUNCE_MS);
         }
       });
       unlistenClose = await win.onCloseRequested(() =>
         schedulePersistWindowState(true),
       );
+      // 窗口失焦态：顶栏降档（mock 环境无 Tauri 事件——属性缺省即聚焦态）
+      unlistenFocus = await win.onFocusChanged(({ payload }) => {
+        document.documentElement.setAttribute(
+          "data-window-focused",
+          String(payload),
+        );
+      });
     })().catch(() => {});
 
     return () => {
@@ -185,6 +192,7 @@
       unlistenResize?.();
       unlistenMove?.();
       unlistenClose?.();
+      unlistenFocus?.();
       if (persistTimer) clearTimeout(persistTimer);
     };
   }
@@ -225,7 +233,7 @@
   }
 
   function activeStreamSid(): string | null {
-    return get(streamSessionId);
+    return stream.streamSessionId;
   }
 
   /** Stable key for concurrent tool calls (ADR-037). */
@@ -234,10 +242,7 @@
   }
 
   function endStreamUi() {
-    streamingBubbleId.set(null);
-    streamingContent.set("");
-    isStreaming.set(false);
-    streamSessionId.set(null);
+    stream.endTurn();
     pendingTools.clear();
     dismissConfirm();
     clearConfirmSessionAllow();
@@ -246,9 +251,9 @@
 
   /** Commit live streamingContent into the bubble (done / cancelled). */
   function flushStreamRender() {
-    const id = get(streamingBubbleId);
+    const id = stream.streamingBubbleId;
     if (!id) return;
-    patchItem(id, { content: get(streamingContent) }, activeStreamSid());
+    patchItem(id, { content: stream.streamingContent }, activeStreamSid());
   }
 
   function isCancelMessage(msg: string | undefined): boolean {
@@ -258,9 +263,9 @@
 
   /** Always leave a stopped bubble — including cancel before the first token. */
   function markStreamStopped(sid: string | null) {
-    const id = get(streamingBubbleId);
+    const id = stream.streamingBubbleId;
     if (id) {
-      const content = get(streamingContent)
+      const content = stream.streamingContent
         .replace(/\n\n— 已停止生成\s*$/, "")
         .trim();
       patchItem(
@@ -317,13 +322,13 @@
           const sid = activeStreamSid();
           switch (ev.type) {
             case "token": {
-              streamingContent.update((c) => c + (ev.text ?? ""));
-              let id = get(streamingBubbleId);
+              stream.appendToken(ev.text ?? "");
+              let id = stream.streamingBubbleId;
               if (!id) {
                 // Placeholder only — live text comes from streamingContent (no per-token store writes).
                 const item = newMessage("assistant", "");
                 appendItem(item, sid);
-                streamingBubbleId.set(item.id);
+                stream.streamingBubbleId = item.id;
               }
               break;
             }
@@ -331,20 +336,26 @@
               if (get(skillRecording)) {
                 skillRecordSteps.update((n) => n + 1);
               }
+              // run_command 执行时自动打开终端面板（顶栏入口已移除——
+              // 终端收编为命令执行视图）。
+              if (ev.name === "run_command" && !get(terminalOpen)) {
+                toggleTerminal();
+              }
               const tool = newTool(ev.name, {
                 recorded: get(skillRecording),
               });
-              const aid = get(streamingBubbleId);
+              const aid = stream.streamingBubbleId;
               if (aid) insertItemBefore(aid, tool, sid);
               else appendItem(tool, sid);
               pendingTools.set(toolCallKey(ev), tool.id);
               // Auto-enter compact mode when desktop tools run; track the
               // current tool for the label. A lingering「已完成」hold from a
               // previous turn yields to the new turn immediately.
+              // 自动变形已取消（用户反馈变形形态不佳）——桌面工具执行时
+              // 保持全窗，仅记录当前工具供手动浮条显示。
               if (DESKTOP_TOOLS.has(ev.name)) {
                 compact.beginRun();
                 compact.tool = ev.name;
-                void compact.enter();
               }
               break;
             }
@@ -421,7 +432,7 @@
             }
             case "done": {
               flushStreamRender();
-              const id = get(streamingBubbleId);
+              const id = stream.streamingBubbleId;
               const responseText = (ev.response || "").trim();
               if (id && responseText) {
                 patchItem(
@@ -467,8 +478,10 @@
               ) {
                 const contSid = sid;
                 setTimeout(() => {
-                  if (!get(isStreaming)) requestAutoContinue(contSid);
-                }, 800);
+                  if (!stream.isStreaming && stream.streamSessionId === contSid) {
+                    void requestAutoContinue(contSid);
+                  }
+                }, AUTO_CONTINUE_DELAY_MS);
               }
               break;
             }
@@ -511,7 +524,7 @@
                   patchItem(pid, { steps }, sid);
                 }
               }
-              const id = get(streamingBubbleId);
+              const id = stream.streamingBubbleId;
               if (id) removeItem(id, sid);
               appendItem(newMessage("assistant", ev.message || "发生错误", true), sid);
               endStreamUi();
@@ -598,7 +611,7 @@
       dismissLoader();
       void finishStartup(get(theme) === "dark").catch(() => {});
       diag("safety reveal fired", "error");
-    }, 2500);
+    }, REVEAL_SAFETY_MS);
 
     void (async () => {
       try {
@@ -639,7 +652,7 @@
       }
       if (meta && key === "n") {
         e.preventDefault();
-        if (get(isStreaming) && get(streamSessionId)) {
+        if (stream.isStreaming && stream.streamSessionId) {
           void cancelGeneration().catch(() => {});
         }
         createSession();
@@ -658,7 +671,7 @@
       }
       if (meta && e.shiftKey && key === "c") {
         e.preventDefault();
-        void compact.toggleWithMorph();
+        void compact.toggle();
         return;
       }
       if (e.key === "Escape") {
@@ -674,7 +687,7 @@
           shortcutsOpen.set(false);
           return;
         }
-        if (get(isStreaming)) {
+        if (stream.isStreaming) {
           void cancelGeneration().catch(() => {});
         }
       }
@@ -691,13 +704,6 @@
 </script>
 
 <div class="app-frame" data-testid="app-frame">
-  <div id="compact-morph-logo" class="compact-morph-logo" aria-hidden="true">
-    <svg width="56" height="56" viewBox="0 0 32 32" fill="none">
-      <rect width="32" height="32" rx="7" fill="var(--color-brand-primary)" />
-      <path d="M8 11h16M8 16h10M8 21h13" stroke="#fff" stroke-width="2.2" stroke-linecap="round" />
-      <path d="M22 20l5 3.5-5 3.5" stroke="var(--color-brand-accent)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" fill="none" />
-    </svg>
-  </div>
   <div class="compact-bar" data-testid="compact-bar">
     <div class="compact-drag" data-tauri-drag-region>
       {#if compact.finished}
@@ -715,7 +721,7 @@
           <circle cx="12" cy="12" r="9" />
           <path d="M8.5 12.5l2.5 2.5 4.5-5" />
         </svg>
-      {:else if compact.tool || $isStreaming}
+      {:else if compact.tool || stream.isStreaming}
         <span class="compact-pulse" aria-hidden="true">
           <span class="compact-spinner"></span>
         </span>
@@ -727,7 +733,7 @@
         <span class="compact-label" data-testid="compact-tool">{compactLabel()}</span>
       </span>
     </div>
-    {#if compact.tool || $isStreaming}
+    {#if compact.tool || stream.isStreaming}
       <button
         type="button"
         class="compact-stop"

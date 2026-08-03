@@ -215,11 +215,7 @@ impl Tool {
                     success: true,
                     output,
                 }),
-                Err(e) => Ok(ToolResult {
-                    metrics: None,
-                    success: false,
-                    output: e.to_string(),
-                }),
+                Err(e) => Ok(ToolResult::fail(e.to_string())),
             },
         }
     }

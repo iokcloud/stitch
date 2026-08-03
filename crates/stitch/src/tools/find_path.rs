@@ -87,13 +87,9 @@ impl FindPath {
         let page: Vec<&String> = results.iter().skip(offset).take(50).collect();
 
         if page.is_empty() && total > 0 {
-            return Ok(ToolResult {
-                metrics: None,
-                success: true,
-                output: format!(
-                    "Offset {offset} exceeds total results ({total}). No more results."
-                ),
-            });
+            return Ok(ToolResult::ok(format!(
+                "Offset {offset} exceeds total results ({total}). No more results."
+            )));
         }
 
         let output_lines: Vec<&str> = page.iter().map(|s| s.as_str()).collect();

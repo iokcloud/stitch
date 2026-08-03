@@ -42,4 +42,27 @@ impl AppError {
     pub fn internal(message: impl Into<String>) -> Self {
         Self::Internal(message.into())
     }
+
+    /// HTTP 状态码（web/api 两层错误映射共用——替代子串匹配推断）。
+    pub fn status_code(&self) -> u16 {
+        match self {
+            Self::Unauthorized(_) => 401,
+            Self::Forbidden(_) => 403,
+            Self::NotFound(_) => 404,
+            Self::Validation(_) | Self::McpScopeDenied(_) => 400,
+            Self::Internal(_) => 500,
+        }
+    }
+
+    /// 去掉 "unauthorized: "/"validation: " 前缀的纯消息（客户端展示用）。
+    pub fn message(&self) -> &str {
+        match self {
+            Self::Unauthorized(m)
+            | Self::Forbidden(m)
+            | Self::NotFound(m)
+            | Self::Validation(m)
+            | Self::McpScopeDenied(m)
+            | Self::Internal(m) => m,
+        }
+    }
 }

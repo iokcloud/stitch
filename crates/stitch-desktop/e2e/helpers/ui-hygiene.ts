@@ -2,27 +2,7 @@
  * Mirror of frontend/e2e/helpers/ui-hygiene.ts (Layer A).
  * Keep patterns in sync — Layer B cannot import frontend helpers easily.
  */
-export const FORBIDDEN_VISIBLE_PATTERNS: RegExp[] = [
-  /__sveltekit_/,
-  /document\.currentScript/,
-  /%sveltekit\./,
-  /Promise\.all\(\s*\[\s*import\s*\(/,
-  /import\s*\(\s*["']\.\/_app\//,
-];
-
-/** AI 味营销腔禁词（ADR-025 补充 · copy-tone 词表镜像）——只收最典型的营销词，避免误伤功能语境。 */
-export const AI_SPEAK_PATTERNS: RegExp[] = [
-  /赋能/,
-  /一站式/,
-  /极致/,
-  /焕新/,
-  /助力/,
-  /打造/,
-  /引领/,
-  /丝滑/,
-  /沉浸式/,
-  /智享/,
-];
+import { FORBIDDEN_VISIBLE_PATTERNS, AI_SPEAK_PATTERNS } from "../../frontend/e2e/helpers/ui-patterns";
 
 type HygieneProbe = {
   loaderPresent: boolean;
@@ -34,7 +14,15 @@ type HygieneProbe = {
 export async function findVisibleUiLeak(): Promise<string | null> {
   const result = (await browser.execute(() => {
     const loader = document.getElementById("app-loader");
-    const text = document.body?.innerText ?? "";
+    // 产品文案检查只扫 UI 壳——克隆 body 后删除脚本/会话内容区再取
+    // innerText：① 不含 script 源码（textContent 会把 __sveltekit_ 等
+    // 注入文本带进来）② 排除用户数据（用户消息/助手回复是用户内容，
+    // 营销词检查不该误伤，如助手自我介绍含「打造」）。
+    const clone = document.body.cloneNode(true) as HTMLElement;
+    clone
+      .querySelectorAll('script, style, template, [role="log"], .message, .md-content')
+      .forEach((n) => n.remove());
+    const text = clone.innerText ?? "";
     const paintedScripts = [...document.querySelectorAll("script")].filter((el) => {
       const r = el.getBoundingClientRect();
       return r.width > 0 && r.height > 0;

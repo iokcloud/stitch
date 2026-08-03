@@ -18,13 +18,14 @@ test.describe("compact automation overlay", () => {
     await page.goto("/");
     await expect(page.getByTestId("chat-view")).toBeVisible({ timeout: 15_000 });
 
-    // Not compact before a desktop tool runs.
-    await expect(page.getByTestId("compact-bar")).toBeHidden();
-
+    // 自动变形已取消（用户决策）——桌面工具执行时保持全窗。
     await page.getByTestId("chat-input").fill("截个屏看看");
     await page.getByTestId("chat-input").press("Enter");
+    await expect(page.getByTestId("stream-rail")).toBeVisible({ timeout: 5_000 });
+    await expect(page.getByTestId("compact-bar")).toBeHidden();
 
-    // Auto-enter: overlay mode + floating bar visible.
+    // 手动切换：顶栏紧凑钮 → 浮条可见。
+    await page.getByTestId("topbar-compact-toggle").click();
     await expect(page.getByTestId("compact-bar")).toBeVisible({ timeout: 5_000 });
     expect(
       await page.evaluate(() => document.documentElement.getAttribute("data-compact")),
@@ -70,15 +71,23 @@ test.describe("compact automation overlay", () => {
 
     await page.getByTestId("chat-input").fill("截个屏看看");
     await page.getByTestId("chat-input").press("Enter");
+    await expect(page.getByTestId("stream-rail")).toBeVisible({ timeout: 5_000 });
 
+    // 手动切换（自动变形已取消）
+    await page.getByTestId("topbar-compact-toggle").click();
     await expect(page.getByTestId("compact-bar")).toBeVisible({ timeout: 5_000 });
     await page.getByTestId("compact-bar").getByText("停止").click();
 
-    // Turn ends: overlay exits, bar hidden, chat shows the stop state.
-    await expect(page.getByTestId("compact-bar")).toBeHidden({ timeout: 5_000 });
+    // Turn ends: 手动浮条保持（pinned）——停止按钮消失、标签转闲置。
+    await expect(page.getByTestId("compact-bar").getByText("停止")).toHaveCount(0, {
+      timeout: 5_000,
+    });
+    // 手动浮条 pinned——停止后保持，用户手动展开。
     expect(
       await page.evaluate(() => document.documentElement.getAttribute("data-compact")),
-    ).toBeNull();
+    ).toBe("true");
+    await page.getByTestId("compact-expand").click();
+    await expect(page.getByTestId("compact-bar")).toBeHidden({ timeout: 5_000 });
   });
 
   test("turn completion holds a visible 已完成 state before restoring", async ({
@@ -95,6 +104,10 @@ test.describe("compact automation overlay", () => {
 
     await page.getByTestId("chat-input").fill("截个屏看看");
     await page.getByTestId("chat-input").press("Enter");
+    await expect(page.getByTestId("stream-rail")).toBeVisible({ timeout: 5_000 });
+
+    // 手动切换（自动变形已取消）
+    await page.getByTestId("topbar-compact-toggle").click();
     await expect(page.getByTestId("compact-bar")).toBeVisible({ timeout: 5_000 });
 
     // Mock finishes the turn (~7s tool) → the bar switches to 已完成 and
@@ -103,10 +116,13 @@ test.describe("compact automation overlay", () => {
       timeout: 12_000,
     });
     await expect(page.getByTestId("compact-done")).toBeVisible();
-    await expect(page.getByTestId("compact-bar")).toBeHidden({ timeout: 6_000 });
+    // 手动钉住：已完成 linger 后回闲置「紧凑模式」，窗口不还原。
+    await expect(page.getByTestId("compact-tool")).toHaveText("紧凑模式", {
+      timeout: 8_000,
+    });
     expect(
       await page.evaluate(() => document.documentElement.getAttribute("data-compact")),
-    ).toBeNull();
+    ).toBe("true");
   });
 
   test("manual toggle hotkey round-trips and pins the bar", async ({ page }) => {

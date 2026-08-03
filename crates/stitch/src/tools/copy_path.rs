@@ -61,11 +61,7 @@ impl CopyPath {
         let dst_full = resolve_under_work_dir(&self.work_dir, dest)?;
 
         if !src_full.exists() {
-            return Ok(ToolResult {
-                metrics: None,
-                success: false,
-                output: format!("Source does not exist: {source}"),
-            });
+            return Ok(ToolResult::fail(format!("Source does not exist: {source}")));
         }
 
         // Create parent directories for destination
@@ -77,18 +73,12 @@ impl CopyPath {
 
         if is_dir {
             copy_dir(&src_full, &dst_full).await?;
-            Ok(ToolResult {
-                metrics: None,
-                success: true,
-                output: format!("Copied directory: {source} -> {dest}"),
-            })
+            Ok(ToolResult::ok(format!(
+                "Copied directory: {source} -> {dest}"
+            )))
         } else {
             tokio::fs::copy(&src_full, &dst_full).await?;
-            Ok(ToolResult {
-                metrics: None,
-                success: true,
-                output: format!("Copied file: {source} -> {dest}"),
-            })
+            Ok(ToolResult::ok(format!("Copied file: {source} -> {dest}")))
         }
     }
 }

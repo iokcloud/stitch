@@ -140,7 +140,8 @@ test.describe("Chat core production paths", () => {
     await mockTauri(page, { apiKeySet: true, streamChat: true, planFlow: true });
     await page.goto("/");
     await expect(page.getByTestId("chat-input")).toBeVisible({ timeout: 15_000 });
-    await page.getByTestId("plan-mode-toggle").check();
+    // 三态循环：auto → on（强制规划）
+    await page.getByTestId("plan-mode-toggle").click();
     await page.getByTestId("chat-input").fill("列目录并总结");
     await page.getByTestId("chat-send").click();
     const plan = page.getByTestId("plan-card");

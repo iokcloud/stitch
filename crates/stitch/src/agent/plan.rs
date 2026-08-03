@@ -382,6 +382,65 @@ pub fn plan_summary_prompt() -> &'static str {
      what was verified, and any remaining risks. Do not start a new large tool campaign."
 }
 
+/// 自动规划判断：轻量 LLM 调用决定任务是否需要先规划。
+/// 三态「自动」模式下用——多步骤/有副作用（写文件、跑命令、改多处）
+/// → true 走规划；简单问答/单步 → false 直接执行。
+pub async fn needs_plan(
+    session: &crate::session::Session,
+    api_base: &str,
+    model: &str,
+    api_key: &str,
+) -> anyhow::Result<bool> {
+    use crate::llm::{self, LlmRequest, StreamEvent};
+    use crate::session::{Message, Role};
+
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+
+    let user_task = session
+        .messages
+        .iter()
+        .rev()
+        .find(|m| m.role == Role::User)
+        .map(|m| m.content.text())
+        .unwrap_or("");
+
+    let mut messages = session.messages.clone();
+    messages.push(Message {
+        role: Role::User,
+        content: crate::session::Content::Text(format!(
+            "任务：{user_task}
+
+判断这个任务是否需要先规划再执行。需要规划的情况：涉及多个步骤、需要写文件、运行命令、修改多处代码、有副作用的操作。不需要规划的情况：简单问答、单个明确操作、仅解释说明。
+只回答 true 或 false，不要其他内容。"
+        )),
+        tool_calls: None,
+        tool_call_id: None,
+    });
+
+    let request = LlmRequest {
+        api_base: api_base.to_string(),
+        model: model.to_string(),
+        api_key: api_key.to_string(),
+        messages,
+        max_tokens: 16,
+        tools: None,
+    };
+
+    let llm_handle = tokio::spawn(async move {
+        let _ = llm::stream_chat(request, tx).await;
+    });
+    let mut text = String::new();
+    while let Some(ev) = rx.recv().await {
+        match ev {
+            StreamEvent::Token(t) => text.push_str(&t),
+            StreamEvent::Done => break,
+            _ => {}
+        }
+    }
+    let _ = llm_handle.await;
+    Ok(text.trim().to_lowercase().contains("true"))
+}
+
 /// Generate a plan from the LLM based on the current session state.
 ///
 /// This makes a lightweight, tools-disabled LLM call asking for a plan.

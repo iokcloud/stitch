@@ -71,11 +71,9 @@ impl DesktopScreenshot {
         }
         #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
         {
-            Ok(ToolResult {
-                metrics: None,
-                success: false,
-                output: "desktop_screenshot is only supported on Windows/macOS/Linux".into(),
-            })
+            Ok(ToolResult::fail(
+                "desktop_screenshot is only supported on Windows/macOS/Linux",
+            ))
         }
     }
 }
@@ -112,21 +110,15 @@ fn screenshot_linux(output_dir: &std::path::PathBuf, ocr: bool) -> anyhow::Resul
         match fb {
             Ok(o) if o.status.success() => (),
             Ok(o) => {
-                return Ok(ToolResult {
-                    metrics: None,
-                    success: false,
-                    output: format!(
-                        "截图失败（需安装 imagemagick 或 gnome-screenshot）：{}",
-                        String::from_utf8_lossy(&o.stderr)
-                    ),
-                });
+                return Ok(ToolResult::fail(format!(
+                    "截图失败（需安装 imagemagick 或 gnome-screenshot）：{}",
+                    String::from_utf8_lossy(&o.stderr)
+                )));
             }
             Err(e) => {
-                return Ok(ToolResult {
-                    metrics: None,
-                    success: false,
-                    output: format!("截图失败：{e}（需安装 imagemagick 或 gnome-screenshot）"),
-                });
+                return Ok(ToolResult::fail(format!(
+                    "截图失败：{e}（需安装 imagemagick 或 gnome-screenshot）"
+                )));
             }
         }
         let _ = err;
@@ -174,18 +166,15 @@ fn screenshot_macos(output_dir: &std::path::PathBuf, ocr: bool) -> anyhow::Resul
     match result {
         Ok(o) if o.status.success() => (),
         Ok(o) => {
-            return Ok(ToolResult {
-                metrics: None,
-                success: false,
-                output: format!("截图失败：{}", String::from_utf8_lossy(&o.stderr)),
-            });
+            return Ok(ToolResult::fail(format!(
+                "截图失败：{}",
+                String::from_utf8_lossy(&o.stderr)
+            )));
         }
         Err(e) => {
-            return Ok(ToolResult {
-                metrics: None,
-                success: false,
-                output: format!("截图失败：{e}（screencapture 不可用）"),
-            });
+            return Ok(ToolResult::fail(format!(
+                "截图失败：{e}（screencapture 不可用）"
+            )));
         }
     }
     let text = if ocr {
@@ -336,11 +325,9 @@ impl DesktopClick {
         }
         #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
         {
-            Ok(ToolResult {
-                metrics: None,
-                success: false,
-                output: "desktop_click is only supported on Windows/macOS/Linux".into(),
-            })
+            Ok(ToolResult::fail(
+                "desktop_click is only supported on Windows/macOS/Linux",
+            ))
         }
     }
 }
@@ -359,21 +346,9 @@ fn click_linux(x: i64, y: i64, button: &str) -> anyhow::Result<ToolResult> {
         .args(["mousemove", xs.as_str(), ys.as_str(), "click", btn])
         .status();
     match ok {
-        Ok(st) if st.success() => Ok(ToolResult {
-            metrics: None,
-            success: true,
-            output: format!("Clicked ({x}, {y}) {button}"),
-        }),
-        Ok(_) => Ok(ToolResult {
-            metrics: None,
-            success: false,
-            output: "点击失败（xdotool 不可用？）".into(),
-        }),
-        Err(e) => Ok(ToolResult {
-            metrics: None,
-            success: false,
-            output: format!("点击失败：{e}（需安装 xdotool）"),
-        }),
+        Ok(st) if st.success() => Ok(ToolResult::ok(format!("Clicked ({x}, {y}) {button}"))),
+        Ok(_) => Ok(ToolResult::fail("点击失败（xdotool 不可用？）")),
+        Err(e) => Ok(ToolResult::fail(format!("点击失败：{e}（需安装 xdotool）"))),
     }
 }
 
@@ -385,24 +360,12 @@ fn click_macos(x: i64, y: i64, button: &str) -> anyhow::Result<ToolResult> {
     let script = format!("tell application \"System Events\" to click at {{{x}, {y}}}");
     let out = Command::new("osascript").arg("-e").arg(&script).output();
     match out {
-        Ok(o) if o.status.success() => Ok(ToolResult {
-            metrics: None,
-            success: true,
-            output: format!("Clicked ({x}, {y})"),
-        }),
-        Ok(o) => Ok(ToolResult {
-            metrics: None,
-            success: false,
-            output: format!(
-                "点击失败：{}（需辅助功能权限）",
-                String::from_utf8_lossy(&o.stderr)
-            ),
-        }),
-        Err(e) => Ok(ToolResult {
-            metrics: None,
-            success: false,
-            output: format!("点击失败：{e}"),
-        }),
+        Ok(o) if o.status.success() => Ok(ToolResult::ok(format!("Clicked ({x}, {y})"))),
+        Ok(o) => Ok(ToolResult::fail(format!(
+            "点击失败：{}（需辅助功能权限）",
+            String::from_utf8_lossy(&o.stderr)
+        ))),
+        Err(e) => Ok(ToolResult::fail(format!("点击失败：{e}"))),
     }
 }
 
@@ -491,11 +454,9 @@ impl DesktopType {
         }
         #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
         {
-            Ok(ToolResult {
-                metrics: None,
-                success: false,
-                output: "desktop_type is only supported on Windows/macOS/Linux".into(),
-            })
+            Ok(ToolResult::fail(
+                "desktop_type is only supported on Windows/macOS/Linux",
+            ))
         }
     }
 }
@@ -509,21 +470,15 @@ fn type_text_linux(text: &str) -> anyhow::Result<ToolResult> {
         .arg(text)
         .output();
     match out {
-        Ok(o) if o.status.success() => Ok(ToolResult {
-            metrics: None,
-            success: true,
-            output: format!("Typed {} chars", text.chars().count()),
-        }),
-        Ok(o) => Ok(ToolResult {
-            metrics: None,
-            success: false,
-            output: format!("键入失败：{}", String::from_utf8_lossy(&o.stderr)),
-        }),
-        Err(e) => Ok(ToolResult {
-            metrics: None,
-            success: false,
-            output: format!("键入失败：{e}（需安装 xdotool）"),
-        }),
+        Ok(o) if o.status.success() => Ok(ToolResult::ok(format!(
+            "Typed {} chars",
+            text.chars().count()
+        ))),
+        Ok(o) => Ok(ToolResult::fail(format!(
+            "键入失败：{}",
+            String::from_utf8_lossy(&o.stderr)
+        ))),
+        Err(e) => Ok(ToolResult::fail(format!("键入失败：{e}（需安装 xdotool）"))),
     }
 }
 
@@ -537,35 +492,24 @@ fn type_text_macos(text: &str) -> anyhow::Result<ToolResult> {
     );
     let out = Command::new("osascript").arg("-e").arg(&script).output();
     match out {
-        Ok(o) if o.status.success() => Ok(ToolResult {
-            metrics: None,
-            success: true,
-            output: format!("Typed {} chars", text.chars().count()),
-        }),
-        Ok(o) => Ok(ToolResult {
-            metrics: None,
-            success: false,
-            output: format!(
-                "键入失败：{}（需辅助功能权限）",
-                String::from_utf8_lossy(&o.stderr)
-            ),
-        }),
-        Err(e) => Ok(ToolResult {
-            metrics: None,
-            success: false,
-            output: format!("键入失败：{e}"),
-        }),
+        Ok(o) if o.status.success() => Ok(ToolResult::ok(format!(
+            "Typed {} chars",
+            text.chars().count()
+        ))),
+        Ok(o) => Ok(ToolResult::fail(format!(
+            "键入失败：{}（需辅助功能权限）",
+            String::from_utf8_lossy(&o.stderr)
+        ))),
+        Err(e) => Ok(ToolResult::fail(format!("键入失败：{e}"))),
     }
 }
 
 #[cfg(windows)]
 fn type_text_windows(text: &str) -> anyhow::Result<ToolResult> {
     if text.len() > 500 {
-        return Ok(ToolResult {
-            metrics: None,
-            success: false,
-            output: "Text too long (max 500 characters for safety)".into(),
-        });
+        return Ok(ToolResult::fail(
+            "Text too long (max 500 characters for safety)",
+        ));
     }
 
     for ch in text.chars() {
@@ -575,11 +519,11 @@ fn type_text_windows(text: &str) -> anyhow::Result<ToolResult> {
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
 
-    Ok(ToolResult {
-        metrics: None,
-        success: true,
-        output: format!("Typed {} characters", text.len()),
-    })
+    Ok(ToolResult::ok(format!(
+        "Typed {} characters (foreground: {})",
+        text.len(),
+        foreground_window_title()
+    )))
 }
 
 // ── desktop_window_list ─────────────────────────────────────────
@@ -621,11 +565,9 @@ impl DesktopWindowList {
         }
         #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
         {
-            Ok(ToolResult {
-                metrics: None,
-                success: false,
-                output: "desktop_window_list is only supported on Windows/macOS/Linux".into(),
-            })
+            Ok(ToolResult::fail(
+                "desktop_window_list is only supported on Windows/macOS/Linux",
+            ))
         }
     }
 }
@@ -640,18 +582,12 @@ fn window_list_linux() -> anyhow::Result<ToolResult> {
     let ids = match out {
         Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).to_string(),
         Ok(_) => {
-            return Ok(ToolResult {
-                metrics: None,
-                success: false,
-                output: "窗口列表失败".into(),
-            });
+            return Ok(ToolResult::fail("窗口列表失败"));
         }
         Err(e) => {
-            return Ok(ToolResult {
-                metrics: None,
-                success: false,
-                output: format!("窗口列表失败：{e}（需安装 xdotool）"),
-            });
+            return Ok(ToolResult::fail(format!(
+                "窗口列表失败：{e}（需安装 xdotool）"
+            )));
         }
     };
     let mut rows: Vec<String> = Vec::new();
@@ -667,19 +603,15 @@ fn window_list_linux() -> anyhow::Result<ToolResult> {
         };
         rows.push(format!("{id}	{title}"));
     }
-    Ok(ToolResult {
-        metrics: None,
-        success: true,
-        output: format!(
-            "Windows ({}):
+    Ok(ToolResult::ok(format!(
+        "Windows ({}):
 {}",
-            rows.len(),
-            rows.join(
-                "
+        rows.len(),
+        rows.join(
+            "
 "
-            )
-        ),
-    })
+        )
+    )))
 }
 
 /// macOS 窗口列表：System Events 前台应用（macOS 无全局窗口标题枚举——简化版）。
@@ -696,33 +628,21 @@ fn window_list_macos() -> anyhow::Result<ToolResult> {
                 .map(|s| s.trim())
                 .filter(|s| !s.is_empty())
                 .collect();
-            Ok(ToolResult {
-                metrics: None,
-                success: true,
-                output: format!(
-                    "Frontmost apps ({}):
+            Ok(ToolResult::ok(format!(
+                "Frontmost apps ({}):
 {}",
-                    apps.len(),
-                    apps.join(
-                        "
+                apps.len(),
+                apps.join(
+                    "
 "
-                    )
-                ),
-            })
+                )
+            )))
         }
-        Ok(o) => Ok(ToolResult {
-            metrics: None,
-            success: false,
-            output: format!(
-                "窗口列表失败：{}（需辅助功能权限）",
-                String::from_utf8_lossy(&o.stderr)
-            ),
-        }),
-        Err(e) => Ok(ToolResult {
-            metrics: None,
-            success: false,
-            output: format!("窗口列表失败：{e}"),
-        }),
+        Ok(o) => Ok(ToolResult::fail(format!(
+            "窗口列表失败：{}（需辅助功能权限）",
+            String::from_utf8_lossy(&o.stderr)
+        ))),
+        Err(e) => Ok(ToolResult::fail(format!("窗口列表失败：{e}"))),
     }
 }
 
@@ -736,14 +656,18 @@ impl DesktopWindowAction {
     pub fn definition(&self) -> ToolDef {
         ToolDef {
             name: "desktop_window_action".into(),
-            description: "Perform an action on a window found by partial title match. \
-                     Actions: 'minimize' (hide to taskbar), 'close' (send close signal), \
-                     'restore' (bring back from minimized), 'maximize' (full screen), \
-                     'focus' (bring to foreground). \
+            description:
+                "Perform an action on windows found by partial title match (case-insensitive; \
+                     applies to ALL matching windows for close, first match for other actions). \
+                     Actions: 'minimize' (hide to taskbar), 'close' (send close signal to all \
+                     matches and verify they closed; if a modal dialog like an unsaved-changes \
+                     prompt blocks the close, the tool reports the dialog title — you must then \
+                     dismiss the dialog (screenshot + click or keyboard, e.g. choose 不保存) \
+                     and retry close), 'restore' (bring back from minimized), 'maximize' (full \
+                     screen), 'focus' (bring to foreground). \
                      Use this to clear overlapping windows before taking screenshots, \
-                     or to bring a target window to the front for interaction. \
-                     Matches the first window whose title contains the given text (case-insensitive)."
-                .into(),
+                     or to bring a target window to the front for interaction."
+                    .into(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -794,19 +718,15 @@ impl DesktopWindowAction {
                 .as_str()
                 .ok_or_else(|| anyhow::anyhow!("Missing 'action' argument"))?;
             let _ = (title, action);
-            Ok(ToolResult {
-                metrics: None,
-                success: false,
-                output: "desktop_window_action is not supported on macOS yet".into(),
-            })
+            Ok(ToolResult::fail(
+                "desktop_window_action is not supported on macOS yet",
+            ))
         }
         #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
         {
-            Ok(ToolResult {
-                metrics: None,
-                success: false,
-                output: "desktop_window_action is only supported on Windows/macOS/Linux".into(),
-            })
+            Ok(ToolResult::fail(
+                "desktop_window_action is only supported on Windows/macOS/Linux",
+            ))
         }
     }
 }
@@ -821,18 +741,12 @@ fn window_action_linux(title_part: &str, action: &str) -> anyhow::Result<ToolRes
     let ids = match out {
         Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).to_string(),
         Ok(_) => {
-            return Ok(ToolResult {
-                metrics: None,
-                success: false,
-                output: "窗口查找失败".into(),
-            });
+            return Ok(ToolResult::fail("窗口查找失败"));
         }
         Err(e) => {
-            return Ok(ToolResult {
-                metrics: None,
-                success: false,
-                output: format!("窗口查找失败：{e}（需安装 xdotool）"),
-            });
+            return Ok(ToolResult::fail(format!(
+                "窗口查找失败：{e}（需安装 xdotool）"
+            )));
         }
     };
     let id_list: Vec<&str> = ids
@@ -841,11 +755,9 @@ fn window_action_linux(title_part: &str, action: &str) -> anyhow::Result<ToolRes
         .filter(|l| !l.is_empty())
         .collect();
     if id_list.is_empty() {
-        return Ok(ToolResult {
-            metrics: None,
-            success: false,
-            output: format!("No visible window with title containing '{title_part}'"),
-        });
+        return Ok(ToolResult::fail(format!(
+            "No visible window with title containing '{title_part}'"
+        )));
     }
     let sub = match action {
         "close" => "windowclose",
@@ -853,11 +765,7 @@ fn window_action_linux(title_part: &str, action: &str) -> anyhow::Result<ToolRes
         "maximize" => "windowmaximize",
         "restore" | "focus" => "windowactivate",
         _ => {
-            return Ok(ToolResult {
-                metrics: None,
-                success: false,
-                output: format!("Unknown action: {action}"),
-            });
+            return Ok(ToolResult::fail(format!("Unknown action: {action}")));
         }
     };
     let mut done = 0usize;
@@ -880,20 +788,12 @@ fn window_action_linux(title_part: &str, action: &str) -> anyhow::Result<ToolRes
             _ => 0,
         };
         if remaining > 0 {
-            return Ok(ToolResult {
-                metrics: None,
-                success: false,
-                output: format!(
-                    "Closed {done} window(s); {remaining} still open (可能被对话框拦截)"
-                ),
-            });
+            return Ok(ToolResult::fail(format!(
+                "Closed {done} window(s); {remaining} still open (可能被对话框拦截)——请先处置对话框（截图确认按钮，选「不保存」或按 Esc），再重试 close"
+            )));
         }
     }
-    Ok(ToolResult {
-        metrics: None,
-        success: true,
-        output: format!("{action}: {done} window(s)"),
-    })
+    Ok(ToolResult::ok(format!("{action}: {done} window(s)")))
 }
 
 #[cfg(windows)]
@@ -975,11 +875,7 @@ fn window_list_windows() -> anyhow::Result<ToolResult> {
         out.push_str("  (no visible windows with titles found)\n");
     }
 
-    Ok(ToolResult {
-        metrics: None,
-        success: true,
-        output: out,
-    })
+    Ok(ToolResult::ok(out))
 }
 
 // ── desktop_key ─────────────────────────────────────────────────
@@ -1081,11 +977,7 @@ impl DesktopKey {
         #[cfg(windows)]
         {
             if keys.is_empty() {
-                return Ok(ToolResult {
-                    metrics: None,
-                    success: false,
-                    output: "No keys provided".into(),
-                });
+                return Ok(ToolResult::fail("No keys provided"));
             }
 
             let t0 = std::time::Instant::now();
@@ -1101,11 +993,9 @@ impl DesktopKey {
         }
         #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
         {
-            Ok(ToolResult {
-                metrics: None,
-                success: false,
-                output: "desktop_key is only supported on Windows/macOS/Linux".into(),
-            })
+            Ok(ToolResult::fail(
+                "desktop_key is only supported on Windows/macOS/Linux",
+            ))
         }
     }
 }
@@ -1119,21 +1009,12 @@ fn key_linux(keys: &[String]) -> anyhow::Result<ToolResult> {
         .args(["key", combo.as_str()])
         .output();
     match out {
-        Ok(o) if o.status.success() => Ok(ToolResult {
-            metrics: None,
-            success: true,
-            output: format!("Pressed {combo}"),
-        }),
-        Ok(o) => Ok(ToolResult {
-            metrics: None,
-            success: false,
-            output: format!("按键失败：{}", String::from_utf8_lossy(&o.stderr)),
-        }),
-        Err(e) => Ok(ToolResult {
-            metrics: None,
-            success: false,
-            output: format!("按键失败：{e}（需安装 xdotool）"),
-        }),
+        Ok(o) if o.status.success() => Ok(ToolResult::ok(format!("Pressed {combo}"))),
+        Ok(o) => Ok(ToolResult::fail(format!(
+            "按键失败：{}",
+            String::from_utf8_lossy(&o.stderr)
+        ))),
+        Err(e) => Ok(ToolResult::fail(format!("按键失败：{e}（需安装 xdotool）"))),
     }
 }
 
@@ -1156,21 +1037,14 @@ fn key_macos(keys: &[String]) -> anyhow::Result<ToolResult> {
         );
         let out = Command::new("osascript").arg("-e").arg(&script).output();
         return match out {
-            Ok(o) if o.status.success() => Ok(ToolResult {
-                metrics: None,
-                success: true,
-                output: format!("Pressed {}", keys.join("+")),
-            }),
-            Ok(o) => Ok(ToolResult {
-                metrics: None,
-                success: false,
-                output: format!("按键失败：{}", String::from_utf8_lossy(&o.stderr)),
-            }),
-            Err(e) => Ok(ToolResult {
-                metrics: None,
-                success: false,
-                output: format!("按键失败：{e}"),
-            }),
+            Ok(o) if o.status.success() => {
+                Ok(ToolResult::ok(format!("Pressed {}", keys.join("+"))))
+            }
+            Ok(o) => Ok(ToolResult::fail(format!(
+                "按键失败：{}",
+                String::from_utf8_lossy(&o.stderr)
+            ))),
+            Err(e) => Ok(ToolResult::fail(format!("按键失败：{e}"))),
         };
     }
     let mods_joined = mods
@@ -1190,24 +1064,12 @@ fn key_macos(keys: &[String]) -> anyhow::Result<ToolResult> {
     );
     let out = Command::new("osascript").arg("-e").arg(&script).output();
     match out {
-        Ok(o) if o.status.success() => Ok(ToolResult {
-            metrics: None,
-            success: true,
-            output: format!("Pressed {}", keys.join("+")),
-        }),
-        Ok(o) => Ok(ToolResult {
-            metrics: None,
-            success: false,
-            output: format!(
-                "按键失败：{}（需辅助功能权限）",
-                String::from_utf8_lossy(&o.stderr)
-            ),
-        }),
-        Err(e) => Ok(ToolResult {
-            metrics: None,
-            success: false,
-            output: format!("按键失败：{e}"),
-        }),
+        Ok(o) if o.status.success() => Ok(ToolResult::ok(format!("Pressed {}", keys.join("+")))),
+        Ok(o) => Ok(ToolResult::fail(format!(
+            "按键失败：{}（需辅助功能权限）",
+            String::from_utf8_lossy(&o.stderr)
+        ))),
+        Err(e) => Ok(ToolResult::fail(format!("按键失败：{e}"))),
     }
 }
 
@@ -1247,11 +1109,7 @@ impl DesktopScroll {
                 .ok_or_else(|| anyhow::anyhow!("Missing 'amount' argument"))?;
 
             if amount == 0 {
-                return Ok(ToolResult {
-                    metrics: None,
-                    success: true,
-                    output: "No scroll needed (amount=0)".into(),
-                });
+                return Ok(ToolResult::ok("No scroll needed (amount=0)"));
             }
 
             let capped = amount.clamp(-20, 20);
@@ -1267,19 +1125,15 @@ impl DesktopScroll {
         {
             let amount = arguments["amount"].as_i64().unwrap_or(1);
             let _ = amount;
-            Ok(ToolResult {
-                metrics: None,
-                success: false,
-                output: "desktop_scroll is not supported on macOS yet".into(),
-            })
+            Ok(ToolResult::fail(
+                "desktop_scroll is not supported on macOS yet",
+            ))
         }
         #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
         {
-            Ok(ToolResult {
-                metrics: None,
-                success: false,
-                output: "desktop_scroll is only supported on Windows/macOS/Linux".into(),
-            })
+            Ok(ToolResult::fail(
+                "desktop_scroll is only supported on Windows/macOS/Linux",
+            ))
         }
     }
 }
@@ -1365,11 +1219,7 @@ fn vk_from_name(name: &str) -> Option<u16> {
 #[cfg(windows)]
 fn send_key_combo(keys: &[String]) -> anyhow::Result<ToolResult> {
     if keys.is_empty() {
-        return Ok(ToolResult {
-            metrics: None,
-            success: false,
-            output: "No keys provided".into(),
-        });
+        return Ok(ToolResult::fail("No keys provided"));
     }
 
     // Resolve all key names to VK codes
@@ -1386,11 +1236,7 @@ fn send_key_combo(keys: &[String]) -> anyhow::Result<ToolResult> {
     let (modifiers, main) = vks.split_at(vks.len().saturating_sub(1));
     let main_key = if main.is_empty() {
         // If all keys are modifiers? unlikely but handle it
-        return Ok(ToolResult {
-            metrics: None,
-            success: false,
-            output: "Need at least one non-modifier key".into(),
-        });
+        return Ok(ToolResult::fail("Need at least one non-modifier key"));
     } else {
         &main[0]
     };
@@ -1419,11 +1265,11 @@ fn send_key_combo(keys: &[String]) -> anyhow::Result<ToolResult> {
     }
 
     let combo_desc: Vec<&str> = keys.iter().map(|s| s.as_str()).collect();
-    Ok(ToolResult {
-        metrics: None,
-        success: true,
-        output: format!("Sent key combo: {}", combo_desc.join("+")),
-    })
+    Ok(ToolResult::ok(format!(
+        "Sent key combo: {} (foreground: {})",
+        combo_desc.join("+"),
+        foreground_window_title()
+    )))
 }
 
 #[cfg(windows)]
@@ -1489,11 +1335,10 @@ fn send_mouse_wheel(amount: i32) -> anyhow::Result<ToolResult> {
     }
 
     let direction = if amount >= 0 { "down" } else { "up" };
-    Ok(ToolResult {
-        metrics: None,
-        success: true,
-        output: format!("Scrolled {direction} by {} notch(es)", amount.abs()),
-    })
+    Ok(ToolResult::ok(format!(
+        "Scrolled {direction} by {} notch(es)",
+        amount.abs()
+    )))
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -1773,9 +1618,7 @@ const INPUT_MOUSE: u32 = 0;
 #[cfg(windows)]
 const INPUT_KEYBOARD: u32 = 1;
 #[cfg(windows)]
-const MOUSEEVENTF_MOVE: u32 = 0x0001;
 #[cfg(windows)]
-const MOUSEEVENTF_ABSOLUTE: u32 = 0x8000;
 #[cfg(windows)]
 const MOUSEEVENTF_LEFTDOWN: u32 = 0x0002;
 #[cfg(windows)]
@@ -1925,6 +1768,8 @@ unsafe extern "system" {
     fn GetWindowTextW(h_wnd: isize, lp_string: *mut u16, n_max_count: i32) -> i32;
     fn GetClassNameW(h_wnd: isize, lp_class_name: *mut u16, n_max_count: i32) -> i32;
     fn GetWindowRect(h_wnd: isize, lp_rect: *mut RECT) -> i32;
+    fn GetWindow(h_wnd: isize, u_cmd: u32) -> isize;
+    fn GetForegroundWindow() -> isize;
 
     // Input
     fn SendInput(c_inputs: u32, p_inputs: *const INPUT, cb_size: i32) -> u32;
@@ -1963,6 +1808,44 @@ unsafe extern "system" fn enum_window_titles_cb(hwnd: isize, lparam: isize) -> i
     1
 }
 
+/// 当前前台窗口标题——键盘输入（desktop_type/desktop_key）的实际落点。
+/// 输入前应确认目标窗口在前台，否则按键会落到别的窗口。
+#[cfg(windows)]
+fn foreground_window_title() -> String {
+    let hwnd = unsafe { GetForegroundWindow() };
+    if hwnd == 0 {
+        return "(no foreground window)".into();
+    }
+    let mut title = [0u16; 256];
+    let len = unsafe { GetWindowTextW(hwnd, title.as_mut_ptr(), title.len() as i32) };
+    if len <= 0 {
+        return "(untitled)".into();
+    }
+    String::from_utf16_lossy(&title[..len as usize])
+}
+
+/// 找仍存活窗口的 owned（模态）对话框，返回其标题列表。
+/// 模态对话框是顶层窗口且 owner 为宿主窗口（GW_OWNER），WM_CLOSE 被它们拦截。
+#[cfg(windows)]
+fn find_owned_dialogs(alive: &[(isize, String)]) -> Vec<String> {
+    use std::sync::Mutex;
+    const GW_OWNER: u32 = 4;
+    let windows: Mutex<Vec<(isize, String)>> = Mutex::new(Vec::new());
+    unsafe {
+        EnumWindows(Some(enum_window_titles_cb), &windows as *const _ as isize);
+    }
+    let mut dialogs: Vec<String> = Vec::new();
+    if let Ok(guard) = windows.lock() {
+        for (h2, t2) in guard.iter() {
+            let owner = unsafe { GetWindow(*h2, GW_OWNER) };
+            if owner != 0 && alive.iter().any(|(h, _)| *h == owner) {
+                dialogs.push(t2.clone());
+            }
+        }
+    }
+    dialogs
+}
+
 #[cfg(windows)]
 fn window_action_windows(title_part: &str, action: &str) -> anyhow::Result<ToolResult> {
     use std::sync::Mutex;
@@ -1984,71 +1867,77 @@ fn window_action_windows(title_part: &str, action: &str) -> anyhow::Result<ToolR
     };
 
     if matches.is_empty() {
-        return Ok(ToolResult {
-            metrics: None,
-            success: false,
-            output: format!("No visible window with title containing '{title_part}'"),
-        });
+        return Ok(ToolResult::fail(format!(
+            "No visible window with title containing '{title_part}'"
+        )));
     }
     let hwnd = matches[0].0;
 
     match action {
         "minimize" => {
             unsafe { ShowWindow(hwnd, SW_MINIMIZE) };
-            Ok(ToolResult {
-                metrics: None,
-                success: true,
-                output: format!("Minimized '{title_part}'"),
-            })
+            Ok(ToolResult::ok(format!("Minimized '{title_part}'")))
         }
         "close" => {
-            // 逐个发 WM_CLOSE（多实例全关），随后复查窗口是否真的关闭——
+            // 逐个发 WM_CLOSE（多实例全关），随后轮询复查窗口是否真的关闭——
             // 模态对话框（如记事本保存提示）会拦截 WM_CLOSE，窗口仍在。
             let mut closed = 0usize;
-            let mut remaining: Vec<String> = Vec::new();
+            let mut remaining: Vec<(isize, String)> = Vec::new();
             for (h, _) in &matches {
                 unsafe { PostMessageW(*h, 0x0010, 0, 0) };
             }
-            // 给窗口处理消息的时间
-            std::thread::sleep(std::time::Duration::from_millis(350));
-            for (h, title) in &matches {
-                let alive = unsafe { IsWindow(*h) != 0 };
-                if alive {
-                    remaining.push(title.clone());
-                } else {
-                    closed += 1;
+            // 给窗口处理消息的时间；轮询至多 ~1.6s（App 关闭可能慢）
+            for _ in 0..4 {
+                std::thread::sleep(std::time::Duration::from_millis(400));
+                remaining.clear();
+                closed = 0;
+                for (h, title) in &matches {
+                    if unsafe { IsWindow(*h) != 0 } {
+                        remaining.push((*h, title.clone()));
+                    } else {
+                        closed += 1;
+                    }
+                }
+                if remaining.is_empty() {
+                    break;
                 }
             }
-            let output = if remaining.is_empty() {
-                format!("Closed {closed} window(s) matching '{title_part}'")
-            } else {
-                format!(
-                    "Closed {closed} window(s); {} still open (可能被模态对话框拦截): {}",
-                    remaining.len(),
-                    remaining.join(" | ")
-                )
-            };
+            if remaining.is_empty() {
+                return Ok(ToolResult::ok(format!(
+                    "Closed {closed} window(s) matching '{title_part}'"
+                )));
+            }
+            // 仍有窗口：大概率被模态对话框拦截——枚举剩余窗口的 owned 对话框
+            // 报出标题，让 agent 有 actionable 信息去处置对话框。
+            let dialogs = find_owned_dialogs(&remaining);
+            let mut output = format!(
+                "Closed {closed} window(s); {} still open (可能被模态对话框拦截): {}",
+                remaining.len(),
+                remaining
+                    .iter()
+                    .map(|(_, t)| t.clone())
+                    .collect::<Vec<_>>()
+                    .join(" | ")
+            );
+            if !dialogs.is_empty() {
+                output.push_str(&format!(
+                    " — 检测到模态对话框: {}. 请先处置对话框（截图确认按钮，用 desktop_click/desktop_key 选「不保存」或按 Esc），再重试 close。",
+                    dialogs.join(" | ")
+                ));
+            }
             Ok(ToolResult {
                 metrics: None,
-                success: remaining.is_empty(),
+                success: false,
                 output,
             })
         }
         "restore" => {
             unsafe { ShowWindow(hwnd, SW_RESTORE) };
-            Ok(ToolResult {
-                metrics: None,
-                success: true,
-                output: format!("Restored '{title_part}'"),
-            })
+            Ok(ToolResult::ok(format!("Restored '{title_part}'")))
         }
         "maximize" => {
             unsafe { ShowWindow(hwnd, SW_MAXIMIZE) };
-            Ok(ToolResult {
-                metrics: None,
-                success: true,
-                output: format!("Maximized '{title_part}'"),
-            })
+            Ok(ToolResult::ok(format!("Maximized '{title_part}'")))
         }
         "focus" => {
             unsafe {
@@ -2057,17 +1946,9 @@ fn window_action_windows(title_part: &str, action: &str) -> anyhow::Result<ToolR
                 }
                 SetForegroundWindow(hwnd);
             }
-            Ok(ToolResult {
-                metrics: None,
-                success: true,
-                output: format!("Focused '{title_part}'"),
-            })
+            Ok(ToolResult::ok(format!("Focused '{title_part}'")))
         }
-        _ => Ok(ToolResult {
-            metrics: None,
-            success: false,
-            output: format!("Unknown action: {action}"),
-        }),
+        _ => Ok(ToolResult::fail(format!("Unknown action: {action}"))),
     }
 }
 
@@ -2124,12 +2005,10 @@ impl DesktopHover {
             // Give the UI time to react to hover
             std::thread::sleep(std::time::Duration::from_millis(600));
 
-            Ok(ToolResult {
-                metrics: None,
-                success: true,
-                output: format!("Mouse moved to ({x}, {y}) — no click, hover only"),
-            }
-            .with_duration_ms(t0))
+            Ok(
+                ToolResult::ok(format!("Mouse moved to ({x}, {y}) — no click, hover only"))
+                    .with_duration_ms(t0),
+            )
         }
         #[cfg(target_os = "linux")]
         {
@@ -2150,19 +2029,15 @@ impl DesktopHover {
                 .as_i64()
                 .ok_or_else(|| anyhow::anyhow!("Missing 'y' argument"))?;
             let _ = (x, y);
-            Ok(ToolResult {
-                metrics: None,
-                success: false,
-                output: "desktop_hover is not supported on macOS yet".into(),
-            })
+            Ok(ToolResult::fail(
+                "desktop_hover is not supported on macOS yet",
+            ))
         }
         #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
         {
-            Ok(ToolResult {
-                metrics: None,
-                success: false,
-                output: "desktop_hover is only supported on Windows/macOS/Linux".into(),
-            })
+            Ok(ToolResult::fail(
+                "desktop_hover is only supported on Windows/macOS/Linux",
+            ))
         }
     }
 }
@@ -2176,21 +2051,9 @@ fn hover_linux(x: i64, y: i64) -> anyhow::Result<ToolResult> {
         .args(["mousemove", xs.as_str(), ys.as_str()])
         .output();
     match out {
-        Ok(o) if o.status.success() => Ok(ToolResult {
-            metrics: None,
-            success: true,
-            output: format!("Moved cursor to ({x}, {y})"),
-        }),
-        Ok(_) => Ok(ToolResult {
-            metrics: None,
-            success: false,
-            output: "移动失败".into(),
-        }),
-        Err(e) => Ok(ToolResult {
-            metrics: None,
-            success: false,
-            output: format!("移动失败：{e}（需安装 xdotool）"),
-        }),
+        Ok(o) if o.status.success() => Ok(ToolResult::ok(format!("Moved cursor to ({x}, {y})"))),
+        Ok(_) => Ok(ToolResult::fail("移动失败")),
+        Err(e) => Ok(ToolResult::fail(format!("移动失败：{e}（需安装 xdotool）"))),
     }
 }
 
@@ -2292,28 +2155,22 @@ impl DesktopBrowser {
         #[cfg(target_os = "linux")]
         {
             let _ = arguments;
-            Ok(ToolResult {
-                metrics: None,
-                success: false,
-                output: "desktop_browser is not supported on Linux yet".into(),
-            })
+            Ok(ToolResult::fail(
+                "desktop_browser is not supported on Linux yet",
+            ))
         }
         #[cfg(target_os = "macos")]
         {
             let _ = arguments;
-            Ok(ToolResult {
-                metrics: None,
-                success: false,
-                output: "desktop_browser is not supported on macOS yet".into(),
-            })
+            Ok(ToolResult::fail(
+                "desktop_browser is not supported on macOS yet",
+            ))
         }
         #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
         {
-            Ok(ToolResult {
-                metrics: None,
-                success: false,
-                output: "desktop_browser is only supported on Windows/macOS/Linux".into(),
-            })
+            Ok(ToolResult::fail(
+                "desktop_browser is only supported on Windows/macOS/Linux",
+            ))
         }
     }
 }
@@ -2383,11 +2240,7 @@ async fn browser_action_windows(
             let (_path, ocr) = snap_ocr("browser")?;
             let mut out = format!("Navigated to {url}\n\n--- OCR Text ---\n{}", ocr.full_text);
             format_words(&mut out, &ocr);
-            Ok(ToolResult {
-                metrics: None,
-                success: true,
-                output: out,
-            })
+            Ok(ToolResult::ok(out))
         }
 
         "click_text" => {
@@ -2414,25 +2267,17 @@ async fn browser_action_windows(
                     let cx = (w.x + w.w / 2) as i32;
                     let cy = (w.y + w.h / 2) as i32;
                     click_at(cx, cy)?;
-                    Ok(ToolResult {
-                        metrics: None,
-                        success: true,
-                        output: format!(
-                            "Clicked \"{}\" at center=({},{}), bbox=({},{},{},{})",
-                            w.text, cx, cy, w.x, w.y, w.w, w.h
-                        ),
-                    })
+                    Ok(ToolResult::ok(format!(
+                        "Clicked \"{}\" at center=({},{}), bbox=({},{},{},{})",
+                        w.text, cx, cy, w.x, w.y, w.w, w.h
+                    )))
                 }
                 None => {
                     let available: Vec<_> = ocr.words.iter().map(|w| w.text.as_str()).collect();
-                    Ok(ToolResult {
-                        metrics: None,
-                        success: false,
-                        output: format!(
-                            "Text \"{text}\" not found on screen. Visible words: {}",
-                            available.join(", ")
-                        ),
-                    })
+                    Ok(ToolResult::fail(format!(
+                        "Text \"{text}\" not found on screen. Visible words: {}",
+                        available.join(", ")
+                    )))
                 }
             }
         }
@@ -2464,42 +2309,26 @@ async fn browser_action_windows(
                     let cx = (w.x + w.w / 2) as i32;
                     let cy = (w.y + w.h / 2) as i32;
                     click_at(cx, cy)?;
-                    Ok(ToolResult {
-                        metrics: None,
-                        success: true,
-                        output: format!(
-                            "Found and clicked \"{}\" at center=({},{})",
-                            w.text, cx, cy
-                        ),
-                    })
+                    Ok(ToolResult::ok(format!(
+                        "Found and clicked \"{}\" at center=({},{})",
+                        w.text, cx, cy
+                    )))
                 }
-                None => Ok(ToolResult {
-                    metrics: None,
-                    success: false,
-                    output: format!(
-                        "After Ctrl+F search, \"{text}\" not found in OCR. Page text: {}",
-                        ocr.full_text
-                    ),
-                }),
+                None => Ok(ToolResult::fail(format!(
+                    "After Ctrl+F search, \"{text}\" not found in OCR. Page text: {}",
+                    ocr.full_text
+                ))),
             }
         }
 
         "new_tab" => {
             combo(&["ctrl", "t"])?;
-            Ok(ToolResult {
-                metrics: None,
-                success: true,
-                output: "Opened new browser tab (Ctrl+T)".into(),
-            })
+            Ok(ToolResult::ok("Opened new browser tab (Ctrl+T)"))
         }
 
         "close_tab" => {
             combo(&["ctrl", "w"])?;
-            Ok(ToolResult {
-                metrics: None,
-                success: true,
-                output: "Closed current tab (Ctrl+W)".into(),
-            })
+            Ok(ToolResult::ok("Closed current tab (Ctrl+W)"))
         }
 
         "refresh" => {
@@ -2508,29 +2337,20 @@ async fn browser_action_windows(
             }
             sleep(1500);
             let (_path, ocr) = snap_ocr("refresh")?;
-            Ok(ToolResult {
-                metrics: None,
-                success: true,
-                output: format!("Page refreshed. OCR text:\n{}", ocr.full_text),
-            })
+            Ok(ToolResult::ok(format!(
+                "Page refreshed. OCR text:\n{}",
+                ocr.full_text
+            )))
         }
 
         "go_back" => {
             combo(&["alt", "left"])?;
-            Ok(ToolResult {
-                metrics: None,
-                success: true,
-                output: "Navigated back (Alt+Left)".into(),
-            })
+            Ok(ToolResult::ok("Navigated back (Alt+Left)"))
         }
 
         "go_forward" => {
             combo(&["alt", "right"])?;
-            Ok(ToolResult {
-                metrics: None,
-                success: true,
-                output: "Navigated forward (Alt+Right)".into(),
-            })
+            Ok(ToolResult::ok("Navigated forward (Alt+Right)"))
         }
 
         "scroll_down" => {
@@ -2538,11 +2358,7 @@ async fn browser_action_windows(
                 send_vk_key(vk::NEXT, false)?;
             }
             sleep(200);
-            Ok(ToolResult {
-                metrics: None,
-                success: true,
-                output: "Scrolled down (PageDown)".into(),
-            })
+            Ok(ToolResult::ok("Scrolled down (PageDown)"))
         }
 
         "scroll_up" => {
@@ -2550,22 +2366,14 @@ async fn browser_action_windows(
                 send_vk_key(vk::PRIOR, false)?;
             }
             sleep(200);
-            Ok(ToolResult {
-                metrics: None,
-                success: true,
-                output: "Scrolled up (PageUp)".into(),
-            })
+            Ok(ToolResult::ok("Scrolled up (PageUp)"))
         }
 
         "read_page" => {
             let (_path, ocr) = snap_ocr("read")?;
             let mut out = format!("--- OCR Text ---\n{}", ocr.full_text);
             format_words(&mut out, &ocr);
-            Ok(ToolResult {
-                metrics: None,
-                success: true,
-                output: out,
-            })
+            Ok(ToolResult::ok(out))
         }
 
         "hover" => {
@@ -2592,11 +2400,7 @@ async fn browser_action_windows(
                 ocr.full_text
             );
             format_words(&mut out, &ocr);
-            Ok(ToolResult {
-                metrics: None,
-                success: true,
-                output: out,
-            })
+            Ok(ToolResult::ok(out))
         }
 
         "hover_text" => {
@@ -2634,22 +2438,14 @@ async fn browser_action_windows(
                         w.text, ocr2.full_text
                     );
                     format_words(&mut out, &ocr2);
-                    Ok(ToolResult {
-                        metrics: None,
-                        success: true,
-                        output: out,
-                    })
+                    Ok(ToolResult::ok(out))
                 }
                 None => {
                     let available: Vec<_> = ocr.words.iter().map(|w| w.text.as_str()).collect();
-                    Ok(ToolResult {
-                        metrics: None,
-                        success: false,
-                        output: format!(
-                            "hover_text: \"{text}\" not found. Visible: {}",
-                            available.join(", ")
-                        ),
-                    })
+                    Ok(ToolResult::fail(format!(
+                        "hover_text: \"{text}\" not found. Visible: {}",
+                        available.join(", ")
+                    )))
                 }
             }
         }
@@ -2661,11 +2457,7 @@ async fn browser_action_windows(
                 .ok_or_else(|| anyhow::anyhow!("Missing 'url' for cdp_navigate"))?;
             let mut client = crate::tools::cdp::CdpClient::connect(9222, None).await?;
             let out = client.navigate(url).await?;
-            Ok(ToolResult {
-                metrics: None,
-                success: true,
-                output: out,
-            })
+            Ok(ToolResult::ok(out))
         }
 
         "cdp_click" => {
@@ -2675,21 +2467,13 @@ async fn browser_action_windows(
                 .ok_or_else(|| anyhow::anyhow!("Missing 'selector' for cdp_click"))?;
             let mut client = crate::tools::cdp::CdpClient::connect(9222, None).await?;
             let out = client.click(selector).await?;
-            Ok(ToolResult {
-                metrics: None,
-                success: true,
-                output: out,
-            })
+            Ok(ToolResult::ok(out))
         }
 
         "cdp_read_page" => {
             let mut client = crate::tools::cdp::CdpClient::connect(9222, None).await?;
             let text = client.read_page_text().await?;
-            Ok(ToolResult {
-                metrics: None,
-                success: true,
-                output: format!("--- Page DOM Text ---\n{text}"),
-            })
+            Ok(ToolResult::ok(format!("--- Page DOM Text ---\n{text}")))
         }
 
         "cdp_evaluate" => {
@@ -2699,11 +2483,7 @@ async fn browser_action_windows(
                 .ok_or_else(|| anyhow::anyhow!("Missing 'js' for cdp_evaluate"))?;
             let mut client = crate::tools::cdp::CdpClient::connect(9222, None).await?;
             let out = client.evaluate(js).await?;
-            Ok(ToolResult {
-                metrics: None,
-                success: true,
-                output: out,
-            })
+            Ok(ToolResult::ok(out))
         }
 
         "cdp_type" => {
@@ -2717,18 +2497,12 @@ async fn browser_action_windows(
                 .ok_or_else(|| anyhow::anyhow!("Missing 'text' for cdp_type"))?;
             let mut client = crate::tools::cdp::CdpClient::connect(9222, None).await?;
             let out = client.type_into(selector, text).await?;
-            Ok(ToolResult {
-                metrics: None,
-                success: true,
-                output: out,
-            })
+            Ok(ToolResult::ok(out))
         }
 
-        _ => Ok(ToolResult {
-            metrics: None,
-            success: false,
-            output: format!("Unknown browser action: {action}"),
-        }),
+        _ => Ok(ToolResult::fail(format!(
+            "Unknown browser action: {action}"
+        ))),
     }
 }
 
@@ -2822,11 +2596,9 @@ impl DesktopAppLaunch {
         }
         #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
         {
-            Ok(ToolResult {
-                metrics: None,
-                success: false,
-                output: "desktop_app_launch is only supported on Windows/macOS/Linux".into(),
-            })
+            Ok(ToolResult::fail(
+                "desktop_app_launch is only supported on Windows/macOS/Linux",
+            ))
         }
     }
 }
@@ -2837,21 +2609,14 @@ fn launch_app_linux(app: &str, _args: &[String]) -> anyhow::Result<ToolResult> {
     use std::process::Command;
     let out = Command::new("xdg-open").arg(app).output();
     match out {
-        Ok(o) if o.status.success() => Ok(ToolResult {
-            metrics: None,
-            success: true,
-            output: format!("Launched {app}"),
-        }),
-        Ok(o) => Ok(ToolResult {
-            metrics: None,
-            success: false,
-            output: format!("启动失败：{}", String::from_utf8_lossy(&o.stderr)),
-        }),
-        Err(e) => Ok(ToolResult {
-            metrics: None,
-            success: false,
-            output: format!("启动失败：{e}（xdg-open 不可用）"),
-        }),
+        Ok(o) if o.status.success() => Ok(ToolResult::ok(format!("Launched {app}"))),
+        Ok(o) => Ok(ToolResult::fail(format!(
+            "启动失败：{}",
+            String::from_utf8_lossy(&o.stderr)
+        ))),
+        Err(e) => Ok(ToolResult::fail(format!(
+            "启动失败：{e}（xdg-open 不可用）"
+        ))),
     }
 }
 
@@ -2861,21 +2626,12 @@ fn launch_app_macos(app: &str) -> anyhow::Result<ToolResult> {
     use std::process::Command;
     let out = Command::new("open").args(["-a", app]).output();
     match out {
-        Ok(o) if o.status.success() => Ok(ToolResult {
-            metrics: None,
-            success: true,
-            output: format!("Launched {app}"),
-        }),
-        Ok(o) => Ok(ToolResult {
-            metrics: None,
-            success: false,
-            output: format!("启动失败：{}", String::from_utf8_lossy(&o.stderr)),
-        }),
-        Err(e) => Ok(ToolResult {
-            metrics: None,
-            success: false,
-            output: format!("启动失败：{e}"),
-        }),
+        Ok(o) if o.status.success() => Ok(ToolResult::ok(format!("Launched {app}"))),
+        Ok(o) => Ok(ToolResult::fail(format!(
+            "启动失败：{}",
+            String::from_utf8_lossy(&o.stderr)
+        ))),
+        Err(e) => Ok(ToolResult::fail(format!("启动失败：{e}"))),
     }
 }
 
@@ -2984,11 +2740,7 @@ fn launch_app_windows(app: &str, args: &[String]) -> anyhow::Result<ToolResult> 
             11 => "out of memory (invalid exe format)".into(),
             _ => format!("ShellExecuteW returned {ret}"),
         };
-        Ok(ToolResult {
-            metrics: None,
-            success: false,
-            output: format!("Could not launch {app}: {hint}"),
-        })
+        Ok(ToolResult::fail(format!("Could not launch {app}: {hint}")))
     }
 }
 

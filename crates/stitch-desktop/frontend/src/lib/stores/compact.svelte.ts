@@ -62,12 +62,17 @@ class CompactController {
 
   /** Hold the bar in a visible「已完成」state, then restore the window. */
   scheduleExit(delayMs = 2600): void {
-    if (!this.mode || this.pinned) return;
+    if (!this.mode) return;
     this.finished = true;
     if (this.#exitTimer) clearTimeout(this.#exitTimer);
     this.#exitTimer = setTimeout(() => {
       this.#exitTimer = null;
-      void this.exit();
+      if (this.pinned) {
+        // 手动钉住：已完成 linger 后回闲置（不自动还原窗口）。
+        this.finished = false;
+      } else {
+        void this.exit();
+      }
     }, delayMs);
   }
 
@@ -98,28 +103,6 @@ class CompactController {
     }
   }
 
-  /** 形态切换带品牌 logo 变幻动画（「变幻感」）——动画播完再切换窗口。
-   * 进入：logo 在大窗口中央闪现 → 窗口切浮条 → 浮条淡入；
-   * 退出：logo 闪现 → 窗口还原 → 内容淡入。 */
-  async toggleWithMorph(): Promise<void> {
-    const logo = document.getElementById("compact-morph-logo");
-    const morph = async (): Promise<void> => {
-      if (!logo) return;
-      logo.classList.add("morph-play");
-      await new Promise((r) => setTimeout(r, 260));
-      logo.classList.remove("morph-play");
-    };
-    const entering = !(this.mode && this.pinned);
-    if (entering) {
-      // 进入：先在大窗口播 logo 变幻 → 再切换窗口（浮条淡入）
-      await morph();
-      await this.toggle();
-    } else {
-      // 退出：先还原窗口 → 再在大窗口播 logo（内容随后淡入）
-      await this.toggle();
-      await morph();
-    }
-  }
 }
 
 export const compact = new CompactController();

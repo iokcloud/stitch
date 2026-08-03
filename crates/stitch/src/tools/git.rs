@@ -144,17 +144,12 @@ impl GitDiff {
             .unwrap_or_default();
 
         if stat.is_empty() && patch.is_empty() {
-            return Ok(ToolResult {
-                metrics: None,
-                success: true,
-                output: if staged {
-                    "No staged changes.".into()
-                } else {
-                    "No unstaged changes (working tree matches HEAD for this scope). \
+            return Ok(ToolResult::ok(if staged {
+                "No staged changes."
+            } else {
+                "No unstaged changes (working tree matches HEAD for this scope). \
                      Try git_status; untracked files need to be read directly."
-                        .into()
-                },
-            });
+            }));
         }
 
         let mut output = String::new();

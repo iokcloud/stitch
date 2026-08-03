@@ -1,11 +1,11 @@
+#![allow(dead_code)]
+
 //! PromptStdio Agent CLI library — shared core for CLI and desktop.
 //!
 //! Re-exports the agent engine, LLM client, tool system, and configuration
 //! so both `stitch` (CLI) and `stitch-desktop` (Tauri) can reuse the same logic.
 //!
 //! Many types are consumed only by `stitch-desktop` or external consumers.
-#![allow(dead_code)]
-
 pub mod agent;
 /// Persisted allow rules（记住此规则）— tool + scope prefix auto-approval.
 pub mod allow;

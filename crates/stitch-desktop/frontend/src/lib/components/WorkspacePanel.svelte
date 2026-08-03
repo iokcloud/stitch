@@ -1,7 +1,9 @@
 <script lang="ts">
   import { onMount } from "svelte";
+import { pushToast } from "../stores/toasts";
   import {
     workspacesData,
+    removeWorkspace,
     workspaceCollapse,
     activateWorkspace,
     groupExpanded,
@@ -21,9 +23,8 @@
   import {
     workDirDialogOpen,
     applyWorkDir,
-    isStreaming,
-    streamSessionId,
   } from "../stores/app";
+import { stream } from "../stores/stream.svelte";
   import {
     registerSessionContextHandlers,
     registerWorkspaceContextHandlers,
@@ -108,6 +109,18 @@
     };
   });
 
+  /** 目录缺失（用户删过文件夹）→ 自动移除工作区 + 轻提示，不红字报错。 */
+  function handleWorkspaceError(e: unknown, id: string) {
+    const msg = String(e);
+    if (msg.includes("不存在") || msg.includes("not exist") || msg.includes("No such")) {
+      const item = $workspacesData.items.find((i) => i.id === id);
+      removeWorkspace(id);
+      pushToast(`「${item?.label ?? "该工作区"}」目录已删除，已从列表移除`, "info");
+      return;
+    }
+    err = msg;
+  }
+
   async function onActivate(id: string) {
     if (busyId) return;
     busyId = id;
@@ -117,7 +130,7 @@
     try {
       await activateWorkspace(id);
     } catch (e) {
-      err = String(e);
+      handleWorkspaceError(e, id);
     } finally {
       busyId = null;
     }
@@ -141,7 +154,7 @@
       await activateWorkspace(id);
       onNewSession();
     } catch (e) {
-      err = String(e);
+      handleWorkspaceError(e, id);
     } finally {
       busyId = null;
     }
@@ -498,7 +511,7 @@
             {#each g.sessions as s (s.id)}
               {@const relative = formatRelativeTime(s.updatedAt, nowMs)}
               {@const streaming =
-                $isStreaming && $streamSessionId != null && $streamSessionId === s.id}
+                stream.isStreaming && stream.streamSessionId != null && stream.streamSessionId === s.id}
               <div
                 class="session-row"
                 class:session-row-active={s.id === $currentSessionId}

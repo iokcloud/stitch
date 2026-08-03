@@ -19,24 +19,9 @@ export const sidebarCollapsed = writable(
     })(),
 );
 
-export const isStreaming = writable(false);
-export const streamingContent = writable("");
-export const streamingBubbleId = writable<string | null>(null);
-/** Session that owns the in-flight generation (prevents cross-session patches). */
-export const streamSessionId = writable<string | null>(null);
-/** Wall-clock start of current generation (ms); null when idle. */
-export const streamStartedAt = writable<number | null>(null);
 export const lastUserMessage = writable("");
 /** Analytics: where the current turn started (`chat` | `scene`). */
 export const lastSendSource = writable<"chat" | "scene">("chat");
-
-isStreaming.subscribe((on) => {
-  if (on) {
-    if (get(streamStartedAt) == null) streamStartedAt.set(Date.now());
-  } else {
-    streamStartedAt.set(null);
-  }
-});
 
 export const confirmOpen = writable(false);
 export const confirmId = writable<string | null>(null);
@@ -57,12 +42,17 @@ function cancelConfirmClose() {
 export const workDirDialogOpen = writable(false);
 export const workDirDialogError = writable("");
 export const recentDirs = writable<string[]>(loadRecent());
-export const planMode = writable(
+export type PlanMode = "auto" | "on" | "off";
+
+/** 三态：auto（模型自主判断是否规划）· on（强制规划）· off（直接执行）。 */
+export const planMode = writable<PlanMode>(
   (() => {
     try {
-      return localStorage.getItem(PLAN_MODE_KEY) === "1";
+      const v = localStorage.getItem(PLAN_MODE_KEY);
+      if (v === "on" || v === "off") return v;
+      return "auto";
     } catch {
-      return false;
+      return "auto";
     }
   })(),
 );
@@ -178,10 +168,10 @@ export function fillComposer(text: string) {
   composerFillRequest.set({ text: t, nonce: Date.now() });
 }
 
-export function setPlanMode(on: boolean) {
-  planMode.set(on);
+export function setPlanMode(mode: PlanMode) {
+  planMode.set(mode);
   try {
-    localStorage.setItem(PLAN_MODE_KEY, on ? "1" : "0");
+    localStorage.setItem(PLAN_MODE_KEY, mode);
   } catch {
     /* ignore */
   }

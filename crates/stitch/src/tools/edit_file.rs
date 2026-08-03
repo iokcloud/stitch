@@ -80,22 +80,14 @@ impl EditFile {
             .ok_or_else(|| anyhow::anyhow!("Missing 'edits' array"))?;
 
         if edits.is_empty() {
-            return Ok(ToolResult {
-                metrics: None,
-                success: false,
-                output: "No edits provided.".into(),
-            });
+            return Ok(ToolResult::fail("No edits provided."));
         }
 
         if edits.len() > MAX_EDITS_PER_CALL {
-            return Ok(ToolResult {
-                metrics: None,
-                success: false,
-                output: format!(
-                    "Too many edits ({}) — maximum is {MAX_EDITS_PER_CALL} per call.",
-                    edits.len()
-                ),
-            });
+            return Ok(ToolResult::fail(format!(
+                "Too many edits ({}) — maximum is {MAX_EDITS_PER_CALL} per call.",
+                edits.len()
+            )));
         }
 
         let full_path = resolve_under_work_dir(&self.work_dir, raw_path)?;
@@ -104,11 +96,7 @@ impl EditFile {
         let original = match tokio::fs::read_to_string(&full_path).await {
             Ok(c) => c,
             Err(e) => {
-                return Ok(ToolResult {
-                    metrics: None,
-                    success: false,
-                    output: format!("Cannot read {raw_path}: {e}"),
-                });
+                return Ok(ToolResult::fail(format!("Cannot read {raw_path}: {e}")));
             }
         };
 
@@ -135,27 +123,19 @@ impl EditFile {
             let count = content.matches(old_text).count();
 
             if count == 0 {
-                return Ok(ToolResult {
-                    metrics: None,
-                    success: false,
-                    output: format!(
-                        "Edit {i} failed: 'old_text' not found in {raw_path}.\n\
+                return Ok(ToolResult::fail(format!(
+                    "Edit {i} failed: 'old_text' not found in {raw_path}.\n\
                          The file may have changed since you last read it. \
                          Re-read the file and try again."
-                    ),
-                });
+                )));
             }
 
             if count > 1 {
-                return Ok(ToolResult {
-                    metrics: None,
-                    success: false,
-                    output: format!(
-                        "Edit {i} failed: 'old_text' matched {count} locations. \
+                return Ok(ToolResult::fail(format!(
+                    "Edit {i} failed: 'old_text' matched {count} locations. \
                          Make old_text more specific (include more surrounding context) \
                          so it matches exactly one location."
-                    ),
-                });
+                )));
             }
 
             // Apply the replacement
@@ -168,11 +148,9 @@ impl EditFile {
         }
 
         if applied == 0 {
-            return Ok(ToolResult {
-                metrics: None,
-                success: true,
-                output: format!("No changes applied to {raw_path} (all edits were no-ops)."),
-            });
+            return Ok(ToolResult::ok(format!(
+                "No changes applied to {raw_path} (all edits were no-ops)."
+            )));
         }
 
         // Snapshot for undo before overwriting
@@ -188,14 +166,10 @@ impl EditFile {
             added.to_string()
         };
 
-        Ok(ToolResult {
-            metrics: None,
-            success: true,
-            output: format!(
-                "Applied {applied} edit(s) to {raw_path} ({delta} bytes):\n{}",
-                report_lines.join("\n")
-            ),
-        })
+        Ok(ToolResult::ok(format!(
+            "Applied {applied} edit(s) to {raw_path} ({delta} bytes):\n{}",
+            report_lines.join("\n")
+        )))
     }
 }
 

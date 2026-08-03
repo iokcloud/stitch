@@ -183,7 +183,7 @@ export type SendMessageOpts = {
 export async function sendMessage(
     message: string,
     history: HistoryMessage[] = [],
-    planMode = false,
+    planMode: string = "auto",
     opts: SendMessageOpts = {},
 ): Promise<void> {
     return invoke("send_message", {
@@ -417,8 +417,11 @@ export async function saveWindowState(maximized: boolean): Promise<void> {
     return invoke("save_window_state", { maximized });
 }
 
+/** Agent 事件通道名（Rust commands.rs 的 AGENT_EVENT_CHANNEL 须一致）。 */
+export const AGENT_EVENT_CHANNEL = "agent-event";
+
 export function listenAgentEvents(handler: (event: AgentEvent) => void): Promise<UnlistenFn> {
-    return listen<AgentEvent>("agent-event", (e) => handler(e.payload));
+    return listen<AgentEvent>(AGENT_EVENT_CHANNEL, (e) => handler(e.payload));
 }
 
 /** 浮条拖拽停止后吸附屏幕边缘（仅 compact 模式由前端调用）。 */

@@ -7,11 +7,10 @@
     config,
     workDir,
     applyWorkDir,
-    isStreaming,
-    streamSessionId,
     sidebarCollapsed,
     toggleSidebar,
   } from "../stores/app";
+import { stream } from "../stores/stream.svelte";
   import {
     sessionsData,
     switchSession,
@@ -63,8 +62,8 @@
   }
 
   async function switchToSession(id: string) {
-    const live = get(streamSessionId);
-    if (get(isStreaming) && live && live !== id) {
+    const live = stream.streamSessionId;
+    if (stream.isStreaming && live && live !== id) {
       void ipc.cancelGeneration().catch(() => {});
     }
     const prevDir = get(workDir);
@@ -81,7 +80,7 @@
   }
 
   async function newSessionFlow() {
-    if (get(isStreaming) && get(streamSessionId)) {
+    if (stream.isStreaming && stream.streamSessionId) {
       void ipc.cancelGeneration().catch(() => {});
     }
     createSession();
@@ -127,7 +126,7 @@
         title: compact.mode ? "退出紧凑模式" : "进入紧凑模式",
         hint: "Ctrl+Shift+C",
         keywords: ["compact", "jinzou", "futiao", "浮条", "紧凑"],
-        run: () => void compact.toggleWithMorph(),
+        run: () => void compact.toggle(),
       },
       {
         id: "act-terminal",

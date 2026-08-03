@@ -257,16 +257,8 @@ impl UndoLastEdit {
 
     pub async fn execute(&self, _arguments: serde_json::Value) -> anyhow::Result<ToolResult> {
         match undo_last() {
-            Ok(description) => Ok(ToolResult {
-                metrics: None,
-                success: true,
-                output: description,
-            }),
-            Err(e) => Ok(ToolResult {
-                metrics: None,
-                success: false,
-                output: format!("Undo failed: {e}"),
-            }),
+            Ok(description) => Ok(ToolResult::ok(description)),
+            Err(e) => Ok(ToolResult::fail(format!("Undo failed: {e}"))),
         }
     }
 }
@@ -295,16 +287,8 @@ impl RedoLastEdit {
 
     pub async fn execute(&self, _arguments: serde_json::Value) -> anyhow::Result<ToolResult> {
         match redo_last() {
-            Ok(description) => Ok(ToolResult {
-                metrics: None,
-                success: true,
-                output: description,
-            }),
-            Err(e) => Ok(ToolResult {
-                metrics: None,
-                success: false,
-                output: format!("Redo failed: {e}"),
-            }),
+            Ok(description) => Ok(ToolResult::ok(description)),
+            Err(e) => Ok(ToolResult::fail(format!("Redo failed: {e}"))),
         }
     }
 }

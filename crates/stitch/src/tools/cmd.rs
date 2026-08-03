@@ -103,21 +103,16 @@ impl RunCommand {
         .await?;
 
         if output.success {
-            Ok(ToolResult {
-                metrics: None,
-                success: true,
-                output: format_output(&output.stdout, &output.stderr),
-            })
+            Ok(ToolResult::ok(format_output(
+                &output.stdout,
+                &output.stderr,
+            )))
         } else {
-            Ok(ToolResult {
-                metrics: None,
-                success: false,
-                output: format!(
-                    "Exit code {}\n{}",
-                    output.code,
-                    format_output(&output.stdout, &output.stderr)
-                ),
-            })
+            Ok(ToolResult::fail(format!(
+                "Exit code {}\n{}",
+                output.code,
+                format_output(&output.stdout, &output.stderr)
+            )))
         }
     }
 }

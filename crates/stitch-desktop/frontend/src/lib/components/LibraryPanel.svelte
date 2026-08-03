@@ -1,10 +1,6 @@
 <script lang="ts">
   import {
     config,
-    isStreaming,
-    streamingBubbleId,
-    streamingContent,
-    streamSessionId,
     lastUserMessage,
     lastSendSource,
     planMode,
@@ -13,6 +9,7 @@
     clearMatureSoftGate,
     isSoftGateMuted,
   } from "../stores/app";
+import { stream } from "../stores/stream.svelte";
   import { nav } from "../nav.svelte";
   import {
     appendItem,
@@ -121,7 +118,7 @@
   });
 
   function useSkill(phrase: string) {
-    if ($isStreaming || !phrase.trim()) return;
+    if (stream.isStreaming || !phrase.trim()) return;
     void ipc.trackUsage("stitch_skill_use", { from: "library" });
     fillComposer(phrase);
   }
@@ -132,14 +129,13 @@
     asAgent: boolean,
     stepCount = 1,
   ) {
-    if ($isStreaming) return;
+    if (stream.isStreaming) return;
     if (!tokenReady) {
       runError = "连接 PromptStdio 账号后即可运行";
       return;
     }
     runError = "";
     const sid = ensureSession();
-    streamSessionId.set(sid);
     deferSessionPersist.set(true);
     clearSedimentCandidate(sid);
     appendItem(
@@ -154,15 +150,12 @@
           status: "pending" as const,
         }));
     appendItem(newPlan({ title, steps }, undefined, { phase: "approved" }), sid);
-    streamingContent.set("");
-    streamingBubbleId.set(null);
-    isStreaming.set(true);
+    stream.beginTurn(sid);
     try {
       if (asAgent) await ipc.runAgent(id);
       else await ipc.runSuite(id);
     } catch (e) {
-      isStreaming.set(false);
-      streamSessionId.set(null);
+      stream.endTurn();
       flushSessionPersist();
       const msg = friendlyLibraryError(e);
       runError = msg;
@@ -174,32 +167,28 @@
 
   async function runSlug() {
     const id = slugInput.trim();
-    if (!id || $isStreaming) return;
+    if (!id || stream.isStreaming) return;
     await runItem(id, id, kind === "agents");
   }
 
   async function runScene(sceneId: string, prompt: string) {
-    if ($isStreaming || !prompt.trim()) return;
+    if (stream.isStreaming || !prompt.trim()) return;
     void ipc.trackUsage("stitch_scene_run", { scene: sceneId, from: "library" });
     lastSendSource.set("scene");
     const sid = ensureSession();
     const history = historyForSend(sid);
-    streamSessionId.set(sid);
     lastUserMessage.set(prompt);
     deferSessionPersist.set(true);
     clearSedimentCandidate(sid);
     appendItem(newMessage("user", prompt), sid);
-    streamingContent.set("");
-    streamingBubbleId.set(null);
+    stream.beginTurn(sid);
     resetTurnUsage();
-    isStreaming.set(true);
     try {
-      await ipc.sendMessage(prompt, history, !!$planMode, {
+      await ipc.sendMessage(prompt, history, $planMode, {
         chatSessionId: sid,
       });
     } catch (e) {
-      isStreaming.set(false);
-      streamSessionId.set(null);
+      stream.endTurn();
       flushSessionPersist();
       appendItem(newMessage("assistant", String(e), true), sid);
     }
@@ -207,7 +196,7 @@
 
   /** Mature scenes: fill composer only (user reviews / edits goal, then sends). G1 soft tip for paid_pool. */
   async function fillMatureScene(scene: MatureScene) {
-    if ($isStreaming || !scene.prompt.trim()) return;
+    if (stream.isStreaming || !scene.prompt.trim()) return;
     // Keep scene_run for product analytics later; no gate_* tracking while埋点冻结.
     void ipc.trackUsage("stitch_scene_run", { scene: scene.id, from: "library_mature" });
     fillComposer(scene.prompt);
@@ -304,10 +293,10 @@
         type="text"
         placeholder={kind === "agents" ? "智能体 ID / 名称" : "套件 ID"}
         bind:value={slugInput}
-        disabled={$isStreaming}
+        disabled={stream.isStreaming}
         onkeydown={(e) => e.key === "Enter" && void runSlug()}
       />
-      <button type="button" class="btn-ghost shrink-0 px-2" disabled={$isStreaming} onclick={runSlug}
+      <button type="button" class="btn-ghost shrink-0 px-2" disabled={stream.isStreaming} onclick={runSlug}
         >运行</button
       >
     </div>
@@ -338,7 +327,7 @@
               type="button"
               class="text-left px-3 py-2 border-b border-[var(--color-border)] last:border-b-0 hover:bg-[var(--color-rail)] disabled:opacity-45"
               data-testid={`library-mature-${scene.id}`}
-              disabled={$isStreaming}
+              disabled={stream.isStreaming}
               onclick={() => void fillMatureScene(scene)}
             >
               <span class="block text-[12px] font-medium text-[var(--color-foreground)]">{scene.title}</span>
@@ -356,7 +345,7 @@
               type="button"
               class="text-left px-3 py-2 border-b border-[var(--color-border)] last:border-b-0 hover:bg-[var(--color-rail)] disabled:opacity-45"
               data-testid={`library-scene-${scene.id}`}
-              disabled={$isStreaming}
+              disabled={stream.isStreaming}
               onclick={() => void runScene(scene.id, scene.prompt)}
             >
               <span class="block text-[12px] font-medium text-[var(--color-foreground)]">{scene.title}</span>
@@ -384,7 +373,7 @@
             type="button"
             class="w-full text-left px-3 py-2.5 border-b border-[var(--color-border)] hover:bg-[var(--color-rail)]"
             data-testid={`library-skill-${sk.slug}`}
-            disabled={$isStreaming}
+            disabled={stream.isStreaming}
             onclick={() => useSkill(sk.install_phrase)}
           >
             <span class="flex items-center gap-2">
@@ -434,7 +423,7 @@
           <button
             type="button"
             class="w-full text-left px-3 py-2.5 border-b border-[var(--color-border)] hover:bg-[var(--color-rail)]"
-            disabled={$isStreaming}
+            disabled={stream.isStreaming}
             onclick={() => {
               createSession();
               void runItem(s.id, s.title, false, s.step_count);
@@ -454,7 +443,7 @@
         <button
           type="button"
           class="w-full text-left px-3 py-2.5 border-b border-[var(--color-border)] hover:bg-[var(--color-rail)]"
-          disabled={$isStreaming}
+          disabled={stream.isStreaming}
           onclick={() => {
             createSession();
             void runItem(a.id, a.name, true);

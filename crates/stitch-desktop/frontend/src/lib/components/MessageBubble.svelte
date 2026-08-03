@@ -22,6 +22,9 @@
     onSediment?: () => void;
     /** True when Done already prefilled a quiet draft (ADR-036). */
     sedimentReady?: boolean;
+    /** 受控展开（虚拟化重建时保持——ChatView 全局 Record 管理）。 */
+    expanded?: boolean;
+    onToggleExpanded?: (v: boolean) => void;
   }
 
   let {
@@ -38,10 +41,12 @@
     onEdit,
     onSediment,
     sedimentReady = false,
+    /** 受控展开（虚拟化重建时保持——ChatView 全局 Record 管理）。 */
+    expanded = false,
+    onToggleExpanded = (_v: boolean) => {},
   }: Props = $props();
 
   let copied = $state(false);
-  let expanded = $state(false);
   let needsClamp = $state(false);
   let bodyEl: HTMLDivElement | undefined = $state();
 
@@ -66,17 +71,14 @@
       needsClamp = false;
       return;
     }
-    // Keep clamp affordance while expanded so collapse control stays mounted.
-    if (expanded) return;
+    // 展开时同样计算：流式重新生成会把 needsClamp 置 false，若展开态提前返回，
+    // 折叠控件在流式结束后永远不恢复。实际裁剪已由 class:message-clamp 的
+    // {needsClamp && !expanded} 门控，展开中不会误裁。
     if (content.length > COLLAPSE_CHARS) {
       needsClamp = true;
       return;
     }
-    if (bodyEl && bodyEl.scrollHeight > CLAMP_MAX_PX) {
-      needsClamp = true;
-      return;
-    }
-    needsClamp = false;
+    needsClamp = bodyEl !== undefined && bodyEl.scrollHeight > CLAMP_MAX_PX;
   }
 
   async function copy() {
@@ -137,8 +139,7 @@
       : error
         ? 'msg-assistant is-error'
         : 'msg-assistant'}
-      {streaming && !thinking ? 'streaming-cursor' : ''}"
-  >
+"  >
     {#if thinking}
       <span class="inline-flex items-center gap-2" aria-label="思考中">
         <span class="inline-flex gap-1">
@@ -163,6 +164,9 @@
           data-testid="msg-stream-text"
         >
           {content}
+          {#if streaming}
+            <span class="stream-caret" aria-hidden="true"></span>
+          {/if}
         </div>
       </div>
     {:else if role === "assistant" && !error}
@@ -186,7 +190,7 @@
               aria-label={expanded ? "收起" : "展开全文"}
               title={expanded ? "收起" : "展开全文"}
               data-testid="message-expand"
-              onclick={() => (expanded = !expanded)}
+              onclick={() => onToggleExpanded(!expanded)}
             >
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true">
                 <path d="M6 9l6 6 6-6" />
@@ -223,7 +227,7 @@
               aria-label={expanded ? "收起" : "展开全文"}
               title={expanded ? "收起" : "展开全文"}
               data-testid="message-expand"
-              onclick={() => (expanded = !expanded)}
+              onclick={() => onToggleExpanded(!expanded)}
             >
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true">
                 <path d="M6 9l6 6 6-6" />

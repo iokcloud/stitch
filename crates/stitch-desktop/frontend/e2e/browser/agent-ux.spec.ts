@@ -7,7 +7,8 @@ test.describe("Agent UX polish (mock)", () => {
     await mockTauri(page, { apiKeySet: true, streamChat: true, planFlow: true });
     await page.goto("/");
     await expect(page.getByTestId("chat-input")).toBeVisible({ timeout: 15_000 });
-    await page.getByTestId("plan-mode-toggle").check();
+    // 三态循环：auto → on（强制规划）
+    await page.getByTestId("plan-mode-toggle").click();
     await page.getByTestId("chat-input").fill("列目录");
     await page.getByTestId("chat-send").click();
     await expect(page.getByTestId("plan-card")).toBeVisible({ timeout: 8_000 });
@@ -168,8 +169,8 @@ test.describe("Agent UX polish (mock)", () => {
     await expect(page.locator(".msg-assistant .md-content").filter({ hasText: "流式回复完成" })).toBeVisible({
       timeout: 10_000,
     });
-    await expect(page.getByTestId("usage-turn")).toContainText("本轮");
-    await expect(page.getByTestId("usage-iters")).toContainText("次调用");
+    await expect(page.getByTestId("usage-turn")).toContainText(/\d(\.\d)?[kK]?/);
+    await expect(page.getByTestId("usage-iters")).toContainText("次");
     await expect(page.getByTestId("usage-context")).toContainText(/Ctx\s+\d/);
     // No layering happened in this mock → no segmented indicator.
     await expect(page.getByTestId("usage-layers")).toHaveCount(0);

@@ -52,11 +52,7 @@ impl DeletePath {
         let full_path = resolve_under_work_dir(&self.work_dir, raw_path)?;
 
         if !full_path.exists() {
-            return Ok(ToolResult {
-                metrics: None,
-                success: false,
-                output: format!("Path does not exist: {raw_path}"),
-            });
+            return Ok(ToolResult::fail(format!("Path does not exist: {raw_path}")));
         }
 
         let is_dir = full_path.is_dir();
@@ -75,10 +71,6 @@ impl DeletePath {
             tokio::fs::remove_file(&full_path).await?;
         }
 
-        Ok(ToolResult {
-            metrics: None,
-            success: true,
-            output: format!("Deleted {kind}: {raw_path}"),
-        })
+        Ok(ToolResult::ok(format!("Deleted {kind}: {raw_path}")))
     }
 }

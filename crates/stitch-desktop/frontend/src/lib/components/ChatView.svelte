@@ -5,11 +5,6 @@
     workDir,
     sidebarCollapsed,
     toggleSidebar,
-    isStreaming,
-    streamingBubbleId,
-    streamingContent,
-    streamSessionId,
-    streamStartedAt,
     lastUserMessage,
     lastSendSource,
     workDirDialogOpen,
@@ -29,6 +24,7 @@
     autoContinueRequest,
     resetAutoContinue,
   } from "../stores/app";
+import { stream } from "../stores/stream.svelte";
   import { pushToast } from "../stores/toasts";
   import { nav } from "../nav.svelte";
   import {
@@ -96,7 +92,8 @@
   /** Pasted image previews pending send (data URLs, in-memory only). */
   type PendingImage = { dataUrl: string; name: string; size: number };
   let pendingImages = $state<PendingImage[]>([]);
-  const MAX_IMAGE_BYTES = 4 * 1024 * 1024;
+  // 与 Rust 侧校验一致（commands.rs send_message：单张 ≤6MB · 单条 ≤9 张）
+  const MAX_IMAGE_BYTES = 6 * 1024 * 1024;
   const MAX_IMAGES_PER_MSG = 9;
   /** Guidance dialog when the current model cannot take images. */
   let visionGuidanceOpen = $state(false);
@@ -109,6 +106,9 @@
     desc: string;
   }>({ open: false, name: "", title: "", desc: "" });
   let messagesEl: HTMLDivElement | undefined = $state();
+  /** 长文展开状态（blockKey → 展开）——虚拟化重建块时保持展开。
+   * 整体替换赋值（$state proxy 明确拦截——Set mutation 有版本差异风险）。 */
+  let expandedBlocks = $state<Record<string, boolean>>({});
   let inputEl: HTMLTextAreaElement | undefined = $state();
   let stickToBottom = $state(true);
   let nowMs = $state(Date.now());
@@ -119,6 +119,11 @@
   } | null>(null);
   let loadingPrevCheckpoint = $state(false);
   const COMPOSER_MAX_H = 120;
+const PLAN_MODE_LABELS: Record<string, string> = {
+  auto: "计划模式：自动（复杂任务先规划）",
+  on: "计划模式：强制（先规划再执行）",
+  off: "计划模式：关闭",
+};
 
   /** Last successful assistant message — the only one offering「重新生成」. */
   const lastAssistantId = $derived.by(() => {
@@ -157,7 +162,7 @@
   });
 
   $effect(() => {
-    if (!$isStreaming) return;
+    if (!stream.isStreaming) return;
     nowMs = Date.now();
     const id = setInterval(() => {
       nowMs = Date.now();
@@ -259,7 +264,7 @@
   const items = $derived($currentSession?.messages ?? []);
   /** While streaming, keep tools as singles to avoid group remount flicker. */
   const timelineRaw = $derived(
-    $isStreaming
+    stream.isStreaming
       ? items.map((item, index) => ({ kind: "single" as const, item, index }))
       : groupTimeline(items),
   );
@@ -394,9 +399,37 @@
       : timeline,
   );
 
+  /** 切会话清跨会话残留（blockKey 是消息 id——历史会话键永远不再命中）。 */
+  let recordPrunedSession: string | null = null;
+  /** 字体就绪后 +1，触发测量 effect 重跑一轮（写入时已按 status 过滤失真值）。 */
+  let fontsReadyTick = $state(0);
+  let fontsRemeasured = false;
+  $effect(() => {
+    const sid = $currentSessionId;
+    if (sid === recordPrunedSession) return;
+    recordPrunedSession = sid;
+    expandedBlocks = {};
+    measuredHeights = {};
+  });
+
   $effect(() => {
     // Measure rendered block heights after each paint; feed the estimates.
+    // 依赖 expandedBlocks：展开/收起后立刻重测真实高度——否则窗口切片与
+    // spacer 一直按折叠态估算走，滚动跨过展开块时会整段跳变。
+    expandedBlocks;
+    fontsReadyTick;
     if (!messagesEl || !virtualizationActive) return;
+    // WebFont 未就绪时测量的高度失真（~23px vs 真实 80px）且不再重测——
+    // 就绪前不写入缓存，就绪后 fontsReadyTick 触发一轮全窗口重测（只一次）。
+    if (!fontsRemeasured) {
+      fontsRemeasured = true;
+      document.fonts?.ready
+        .then(() => {
+          fontsReadyTick++;
+        })
+        .catch(() => {});
+    }
+    const fontsLoaded = document.fonts?.status === "loaded";
     const nodes = messagesEl.querySelectorAll<HTMLElement>("[data-block-key]");
     if (!nodes.length) return;
     const next: Record<string, number> = {};
@@ -405,6 +438,7 @@
       const key = el.getAttribute("data-block-key");
       if (!key) continue;
       const h = el.getBoundingClientRect().height;
+      if (!fontsLoaded) continue; // 字体未就绪——高度失真，不入缓存
       if (h > 0 && Math.abs((measuredHeights[key] ?? 0) - h) > 2) {
         next[key] = h;
         changed = true;
@@ -429,7 +463,7 @@
     ro.observe(el);
     return () => ro.disconnect();
   });
-  const streamingId = $derived($streamingBubbleId);
+  const streamingId = $derived(stream.streamingBubbleId);
 
   /**
    * Layered context segments (hot/warm/cold) — only surfaced once a compact
@@ -463,8 +497,8 @@
       contextLabel: string;
       iterLabel: string;
     };
-    if (!$isStreaming) return null as Act | null;
-    const started = $streamStartedAt ?? nowMs;
+    if (!stream.isStreaming) return null as Act | null;
+    const started = stream.streamStartedAt ?? nowMs;
     const elapsedLabel = formatElapsed((nowMs - started) / 1000);
     const u = $usage;
     const turnTok = u.inputTokens + u.outputTokens;
@@ -540,7 +574,7 @@
         }
       }
     }
-    if ($streamingBubbleId && !$streamingContent) {
+    if (stream.streamingBubbleId && !stream.streamingContent) {
       return {
         ...base,
         phase: "思考",
@@ -550,8 +584,8 @@
         progressLabel: "等待首 token",
       };
     }
-    if ($streamingBubbleId) {
-      const chars = $streamingContent.length;
+    if (stream.streamingBubbleId) {
+      const chars = stream.streamingContent.length;
       // Soft receive progress (no server total): asymptote toward 90%.
       const pct = Math.min(90, Math.round(Math.log10(chars + 10) * 28));
       return {
@@ -566,8 +600,8 @@
     return {
       ...base,
       phase: "处理",
-      summary: $planMode ? "正在生成计划…" : "处理中…",
-      format: $planMode ? "计划" : "流式",
+      summary: $planMode !== "off" ? "正在生成计划…" : "处理中…",
+      format: $planMode === "on" ? "计划" : $planMode === "auto" ? "自动" : "流式",
       indeterminate: true,
     };
   });
@@ -690,8 +724,8 @@
   /** Follow growing text without tying scroll to every markdown reflow. */
   let streamScrollRaf: number | null = null;
   $effect(() => {
-    if (!$isStreaming || !stickToBottom) return;
-    $streamingContent;
+    if (!stream.isStreaming || !stickToBottom) return;
+    stream.streamingContent;
     if (streamScrollRaf !== null) return;
     streamScrollRaf = requestAnimationFrame(() => {
       streamScrollRaf = null;
@@ -701,7 +735,7 @@
 
   let wasStreaming = false;
   $effect(() => {
-    const streaming = $isStreaming;
+    const streaming = stream.isStreaming;
     if (wasStreaming && !streaming) {
       stickToBottom = true;
       void scrollAnswerIntoView();
@@ -715,7 +749,7 @@
     const req = $autoContinueRequest;
     if (!req || req.nonce === lastAutoContinueNonce) return;
     lastAutoContinueNonce = req.nonce;
-    if ($isStreaming) return;
+    if (stream.isStreaming) return;
     if ($currentSession?.id !== req.sid) return;
     if (input.trim()) {
       // User is typing — they're taking over; break the chain, keep the button.
@@ -737,7 +771,7 @@
     },
   ) {
     const message = (text ?? input).trim();
-    if ((!message && pendingImages.length === 0) || $isStreaming) return;
+    if ((!message && pendingImages.length === 0) || stream.isStreaming) return;
     // Send-time snapshot — cleared only after a successful IPC call.
     const images = pendingImages.map((p) => p.dataUrl);
     if (!opts?.skipUserAppend) {
@@ -766,7 +800,6 @@
       removeItemsFrom(rewind.itemId, sid);
       sendOpts = { ...opts, rewindToUser: rewind.original, rewindDrop: true };
     }
-    streamSessionId.set(sid);
     deferSessionPersist.set(true);
     clearSedimentCandidate(sid);
     const history = historyForSend(sid);
@@ -783,9 +816,7 @@
         renameSession(sid, preferred);
       }
     }
-    streamingContent.set("");
-    streamingBubbleId.set(null);
-    isStreaming.set(true);
+    stream.beginTurn(sid);
     try {
       await ipc.sendMessage(message, history, $planMode, {
         profileId: sessionProfileId || null,
@@ -799,8 +830,7 @@
       });
       pendingImages = [];
     } catch (e) {
-      isStreaming.set(false);
-      streamSessionId.set(null);
+      stream.softUnlockIfStale(sid);
       flushSessionPersist();
       appendItem(newMessage("assistant", String(e), true), sid);
     }
@@ -808,7 +838,7 @@
 
   async function retryError(errorId: string) {
     const session = $currentSession;
-    if (!session || $isStreaming) return;
+    if (!session || stream.isStreaming) return;
     const idx = session.messages.findIndex((m) => m.id === errorId);
     if (idx < 0) return;
     let userContent = "";
@@ -829,7 +859,7 @@
    *  user turn, then re-run it (the discarded turn never reaches the model). */
   async function regenerateFrom(itemId: string) {
     const session = $currentSession;
-    if (!session || $isStreaming) return;
+    if (!session || stream.isStreaming) return;
     const idx = session.messages.findIndex((m) => m.id === itemId);
     if (idx < 0) return;
     let userItem: { id: string; content: string } | null = null;
@@ -851,7 +881,7 @@
   /** Edit a user message into the composer; the next send replaces the turn
    *  and everything after it. */
   function startEditMessage(itemId: string, content: string, images?: string[]) {
-    if ($isStreaming) return;
+    if (stream.isStreaming) return;
     historyIdx = -1;
     editRewind = { itemId, original: content };
     input = content;
@@ -913,7 +943,7 @@
   }
 
   async function stop() {
-    const sidAtStop = $streamSessionId;
+    const sidAtStop = stream.streamSessionId;
     try {
       await ipc.cancelGeneration();
     } catch {
@@ -921,18 +951,17 @@
     }
     // Soft unlock if cancelled event is delayed (e.g. plan wait).
     setTimeout(() => {
-      if ($isStreaming && $streamSessionId === sidAtStop) {
+      if (stream.isStreaming && stream.streamSessionId === sidAtStop) {
         markUndoneToolsStopped(sidAtStop);
         markActivePlanInterrupted(sidAtStop);
-        isStreaming.set(false);
-        streamSessionId.set(null);
+        stream.endTurn();
         flushSessionPersist();
       }
     }, 1200);
   }
 
   function cancelIfLeavingStream(nextId?: string | null) {
-    if ($isStreaming && $streamSessionId && $streamSessionId !== nextId) {
+    if (stream.isStreaming && stream.streamSessionId && stream.streamSessionId !== nextId) {
       void ipc.cancelGeneration().catch(() => {});
     }
   }
@@ -966,7 +995,7 @@
   /** Shared image intake (paste + file picker): size/limit checks + preview. */
   function addImageFile(file: File) {
     if (file.size > MAX_IMAGE_BYTES) {
-      pushToast("图片超过 4MB，未添加", "error");
+      pushToast("图片超过 6MB，未添加", "error");
       return;
     }
     if (pendingImages.length >= MAX_IMAGES_PER_MSG) return;
@@ -1016,7 +1045,7 @@
   let dragDepth = $state(0);
   $effect(() => {
     const onDragOver = (e: DragEvent) => {
-      if (!$isStreaming && e.dataTransfer?.types.includes("Files")) {
+      if (!stream.isStreaming && e.dataTransfer?.types.includes("Files")) {
         e.preventDefault(); // stop the browser from opening the file
         if (e.type === "dragenter") dragDepth += 1;
       }
@@ -1295,15 +1324,33 @@
           {/if}
         </div>
 
-        <label class="plan-toggle">
-          <input
-            type="checkbox"
-            data-testid="plan-mode-toggle"
-            checked={$planMode}
-            onchange={(e) => setPlanMode(e.currentTarget.checked)}
-          />
-          计划模式
-        </label>
+        <button
+          type="button"
+          class="icon-btn"
+          class:is-active={$planMode !== "off"}
+          data-testid="plan-mode-toggle"
+          aria-label={PLAN_MODE_LABELS[$planMode]}
+          aria-pressed={$planMode !== "off"}
+          title={PLAN_MODE_LABELS[$planMode]}
+          onclick={() =>
+            setPlanMode($planMode === "auto" ? "on" : $planMode === "on" ? "off" : "auto")}
+        >
+          {#if $planMode === "on"}
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true">
+              <rect x="3.5" y="4.5" width="17" height="16" rx="2" />
+              <path d="M3.5 9h17M8 3v3M16 3v3M9 14l2 2 4-4" />
+            </svg>
+          {:else if $planMode === "auto"}
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true">
+              <path d="M13 2L4 14h6l-1 8 9-12h-6l1-8z" />
+            </svg>
+          {:else}
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true">
+              <rect x="3.5" y="4.5" width="17" height="16" rx="2" opacity="0.4" />
+              <path d="M3.5 9h17M8 3v3M16 3v3" opacity="0.4" />
+            </svg>
+          {/if}
+        </button>
       </div>
 
       <div class="topbar-group topbar-system">
@@ -1326,20 +1373,15 @@
           <span class="usage-meter-text" data-testid="usage-context">
             Ctx {formatTokenCount($usage.contextTokens)}/{formatTokenCount($usage.contextLimit)}
           </span>
-          <span class="usage-meter-sep" aria-hidden="true">·</span>
-          <span class="usage-meter-text" data-testid="usage-turn">
-            {#if $usage.inputTokens + $usage.outputTokens > 0}
-              本轮 {formatTokenCount($usage.inputTokens + $usage.outputTokens)}
-              <span class="usage-meter-muted">
-                (↑{formatTokenCount($usage.inputTokens)} ↓{formatTokenCount($usage.outputTokens)})
-              </span>
-            {:else}
-              本轮 —
-            {/if}
-          </span>
+          {#if $usage.inputTokens + $usage.outputTokens > 0}
+            <span class="usage-meter-sep" aria-hidden="true">·</span>
+            <span class="usage-meter-text" data-testid="usage-turn">
+              {formatTokenCount($usage.inputTokens + $usage.outputTokens)}
+            </span>
+          {/if}
           {#if $usage.iterations > 0}
             <span class="usage-meter-sep" aria-hidden="true">·</span>
-            <span class="usage-meter-text" data-testid="usage-iters">{$usage.iterations} 次调用</span>
+            <span class="usage-meter-text" data-testid="usage-iters">{$usage.iterations} 次</span>
           {/if}
           {#if $usage.compacted}
             <span class="usage-meter-badge">已压缩</span>
@@ -1354,28 +1396,13 @@
           aria-label={compact.mode ? "退出紧凑模式" : "紧凑模式"}
           aria-pressed={compact.mode}
           title={compact.mode ? "退出紧凑模式" : "紧凑模式"}
-          onclick={() => void compact.toggleWithMorph()}
+          onclick={() => void compact.toggle()}
         >
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true">
             <path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5" />
           </svg>
         </button>
-        <button
-        type="button"
-        class="icon-btn"
-        class:is-active={$terminalOpen}
-        data-testid="toggle-terminal"
-        aria-label={$terminalOpen ? "关闭终端" : "打开终端"}
-        aria-pressed={$terminalOpen}
-        title="终端"
-        onclick={toggleTerminal}
-      >
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true">
-          <rect x="3" y="5" width="18" height="14" rx="2" />
-          <path d="M7 10l3 2-3 2M12 14h5" />
-        </svg>
-      </button>
-      <button
+              <button
         type="button"
         class="icon-btn"
         data-testid="toggle-theme"
@@ -1404,7 +1431,6 @@
       <button
         type="button"
         class="icon-btn"
-        class:has-account-dot={!$config?.api_token_set}
         data-testid="open-settings"
         aria-label={!$config?.api_token_set ? "打开设置（未连接账号）" : "打开设置"}
         onclick={() =>
@@ -1521,18 +1547,50 @@
                 <MessageBubble
                   role={item.role}
                   content={
-                    item.id === streamingId && $isStreaming
-                      ? $streamingContent || item.content
+                    item.id === streamingId && stream.isStreaming
+                      ? stream.streamingContent || item.content
                       : item.content
                   }
                   error={!!item.error}
                   images={item.images}
                   imagesStripped={item.imagesStripped}
-                  streaming={item.id === streamingId && $isStreaming}
-                  thinking={item.id === streamingId && $isStreaming && !item.content}
+                  streaming={item.id === streamingId && stream.isStreaming}
+                  expanded={!!expandedBlocks[blockKey(block)]}
+                  onToggleExpanded={(v) => {
+                    const key = blockKey(block);
+                    expandedBlocks = { ...expandedBlocks, [key]: v };
+                    // 视觉锚定：展开/收起改变块高，虚拟窗口按新高度重排（测量在
+                    // 下一帧写入）。块顶部在展开/收起时不动（增长在块内部），但
+                    // 贴窗口边缘的块可能在重排后超界被虚拟化裁出。等测量完成后
+                    // 检查：块若被裁出窗口，滚到其估算位置（展开块可见是不变量）；
+                    // 仍在窗口内则原位自然保持。主动操作=阅读意图，放弃钉底
+                    // （stickToBottom 会把视口推到新底部，刚展开的消息头部滚出）。
+                    const prevTop = messagesEl?.querySelector(
+                      `[data-block-key="${CSS.escape(key)}"]`,
+                    )?.getBoundingClientRect().top;
+                    stickToBottom = false;
+                    requestAnimationFrame(() =>
+                      requestAnimationFrame(() => {
+                        if (!messagesEl) return;
+                        if (messagesEl.querySelector(`[data-block-key="${CSS.escape(key)}"]`)) {
+                          return; // 窗口内——原位自然保持
+                        }
+                        // 被裁出：滚到估算位置并保持点击时的相对视图（prevTop 可负）
+                        let acc = 0;
+                        for (const b of timeline) {
+                          if (blockKey(b) === key) break;
+                          acc += estimateBlockHeight(b) + BLOCK_GAP;
+                        }
+                        messagesEl.scrollTop = Math.max(0, acc + (prevTop ?? 0));
+                      }),
+                    );
+                  }}
+                  thinking={
+                    item.id === streamingId && stream.isStreaming && !stream.streamingContent
+                  }
                   onRetry={item.error ? () => void retryError(item.id) : undefined}
                   onContinue={
-                    item.role === "assistant" && item.hitCap && !$isStreaming
+                    item.role === "assistant" && item.hitCap && !stream.isStreaming
                       ? () => void send("继续执行")
                       : undefined
                   }
@@ -1540,13 +1598,13 @@
                     item.role === "assistant" &&
                     !item.error &&
                     !item.stopped &&
-                    !$isStreaming &&
+                    !stream.isStreaming &&
                     item.id === lastAssistantId
                       ? () => void regenerateFrom(item.id)
                       : undefined
                   }
                   onEdit={
-                    item.role === "user" && !$isStreaming
+                    item.role === "user" && !stream.isStreaming
                       ? () => startEditMessage(item.id, item.content, item.images)
                       : undefined
                   }
@@ -1573,7 +1631,7 @@
                   recorded={!!item.recorded}
                   stacked={toolStacked}
                   elapsedMs={!item.done
-                    ? nowMs - (item.startedAt ?? $streamStartedAt ?? nowMs)
+                    ? nowMs - (item.startedAt ?? stream.streamStartedAt ?? nowMs)
                     : 0}
                   metrics={item.metrics}
                 />
@@ -1618,7 +1676,7 @@
             void scrollToBottom();
           }}
         >
-          {#if $isStreaming}
+          {#if stream.isStreaming}
             <span class="pill-dot" aria-hidden="true"></span>
           {/if}
           <span>回到底部</span>
@@ -1735,22 +1793,7 @@
         </div>
       {/if}
       <div class="composer-row">
-        <button
-          type="button"
-          class="record-toggle"
-          class:recording={$skillRecording}
-          data-testid="record-toggle"
-          onclick={() => toggleRecording()}
-          title={$skillRecording ? "停止录制并保存为 Skill" : "开始录制桌面自动化工作流"}
-        >
-          {#if $skillRecording}
-            <span class="record-dot" aria-hidden="true"></span>
-            录制中<span class="record-steps" data-testid="record-step-count"> · {$skillRecordSteps} 步</span>
-          {:else}
-            录制
-          {/if}
-        </button>
-        {#if skillSaveDraft.open}
+                {#if skillSaveDraft.open}
           <div class="skill-save-dialog" data-testid="skill-save-dialog">
             <div class="skill-save-fields">
               <input
@@ -1850,7 +1893,7 @@
               placeholder={$planMode ? "描述任务，先生成计划…" : "输入消息…"}
               bind:this={inputEl}
               bind:value={input}
-              disabled={$isStreaming}
+              disabled={stream.isStreaming}
               onkeydown={onKeydown}
               oninput={() => syncComposerHeight()}
               onpaste={handlePaste}
@@ -1861,7 +1904,7 @@
               data-testid="image-attach"
               aria-label="添加图片"
               title="添加图片"
-              disabled={$isStreaming}
+              disabled={stream.isStreaming}
               onclick={() =>
                 (visionEnabled ? imageFileEl?.click() : (visionGuidanceOpen = true))}
             >
@@ -1882,14 +1925,14 @@
             />
             <button
               type="button"
-              class="composer-send {$isStreaming ? 'is-stop' : ''}"
+              class="composer-send {stream.isStreaming ? 'is-stop' : ''}"
               data-testid="chat-send"
-              aria-label={$isStreaming ? "停止生成" : "发送"}
-              title={$isStreaming ? "停止生成" : "发送"}
-              disabled={!$isStreaming && !input.trim() && pendingImages.length === 0}
-              onclick={() => ($isStreaming ? stop() : send())}
+              aria-label={stream.isStreaming ? "停止生成" : "发送"}
+              title={stream.isStreaming ? "停止生成" : "发送"}
+              disabled={!stream.isStreaming && !input.trim() && pendingImages.length === 0}
+              onclick={() => (stream.isStreaming ? stop() : send())}
             >
-              {#if $isStreaming}
+              {#if stream.isStreaming}
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
                   <rect x="6" y="6" width="12" height="12" rx="1.5" />
                 </svg>
@@ -1908,7 +1951,7 @@
           {#if $planMode}
             · 计划模式已开
           {/if}
-          {#if $isStreaming}
+          {#if stream.isStreaming}
             · 生成中，结束后可发送
           {/if}
         </span>
@@ -1919,7 +1962,7 @@
     </footer>
   </div>
 
-  {#if dragDepth > 0 && !$isStreaming}
+  {#if dragDepth > 0 && !stream.isStreaming}
     <div class="image-drop-overlay" data-testid="image-drop-overlay">
       <div class="image-drop-hint">松开以添加图片</div>
     </div>

@@ -15,7 +15,7 @@ test.describe("Stitch UI smoke (browser / mock IPC)", () => {
   });
 
   test("configured user lands on chat", async ({ page }) => {
-    await mockTauri(page, { apiKeySet: true });
+    await mockTauri(page, { apiKeySet: true, streamChat: true, streamToolOutput: true });
     await page.goto("/");
 
     await expect(page.getByTestId("chat-view")).toBeVisible({ timeout: 15_000 });
@@ -40,7 +40,7 @@ test.describe("Stitch UI smoke (browser / mock IPC)", () => {
   });
 
   test("Skill tab fills composer; terminal drawer toggles", async ({ page }) => {
-    await mockTauri(page, { apiKeySet: true });
+    await mockTauri(page, { apiKeySet: true, streamChat: true, streamToolOutput: true });
     await page.goto("/");
     await expect(page.getByTestId("chat-view")).toBeVisible({ timeout: 15_000 });
 
@@ -50,8 +50,10 @@ test.describe("Stitch UI smoke (browser / mock IPC)", () => {
     await page.getByTestId("library-skill-pm-prd-demo").click();
     await expect(page.getByTestId("chat-input")).toHaveValue(/安装 PromptStdio/);
 
-    await page.getByTestId("toggle-terminal").click();
-    await expect(page.getByTestId("terminal-panel")).toBeVisible();
+    // run_command 执行时终端自动弹出（顶栏入口已移除——收编为命令视图）。
+    await page.getByTestId("chat-input").fill("跑一个命令");
+    await page.getByTestId("chat-send").click();
+    await expect(page.getByTestId("terminal-panel")).toBeVisible({ timeout: 10_000 });
     await page.getByTestId("terminal-close").click();
     await expect(page.getByTestId("terminal-panel")).toHaveCount(0);
     await assertUiHygiene(page);

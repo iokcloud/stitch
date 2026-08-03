@@ -51,19 +51,11 @@ impl CreateDirectory {
         let full_path = resolve_under_work_dir(&self.work_dir, raw_path)?;
 
         if full_path.exists() {
-            return Ok(ToolResult {
-                metrics: None,
-                success: false,
-                output: format!("Path already exists: {raw_path}"),
-            });
+            return Ok(ToolResult::fail(format!("Path already exists: {raw_path}")));
         }
 
         tokio::fs::create_dir_all(&full_path).await?;
 
-        Ok(ToolResult {
-            metrics: None,
-            success: true,
-            output: format!("Created directory: {raw_path}"),
-        })
+        Ok(ToolResult::ok(format!("Created directory: {raw_path}")))
     }
 }

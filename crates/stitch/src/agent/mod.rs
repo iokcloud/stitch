@@ -115,49 +115,238 @@ pub enum AgentEvent {
     Notice { message: String },
 }
 
-/// Run the ReAct agent loop for a single task.
-///
-/// `work_dir` / `allow_rules` feed the confirm gate (outside-workspace reads
-/// and persisted allow rules). Ignored when `skip_confirm` is set.
+/// 渲染/确认/取消/落盘差异抽象——CLI 与桌面的 ReAct 循环共用一份核心
+/// （审查发现：run_react 与 run_react_streaming 曾是 ~450 行逐行复制，
+/// 差异仅在此 trait 的五个方法）。
+/// 内部 trait（仅本 crate 消费）——async fn 无需公共 auto-trait 保证。
+#[allow(async_fn_in_trait)]
+pub trait ReactRenderer {
+    /// 工具执行前的中间文本（CLI 终端渲染；桌面文本走 on_event 的 token）。
+    fn on_interim_text(&mut self, text: &str);
+    /// 事件出口（桌面 event_tx；CLI 忽略）。
+    fn on_event(&mut self, ev: AgentEvent);
+    /// 确认门：返回是否放行工具执行。
+    async fn confirm_tool(&mut self, tool: &str, call_id: &str, message: &str) -> bool;
+    /// 取消检查（CLI 恒 false；桌面读 cancel_flag）。
+    fn is_cancelled(&self) -> bool;
+    /// 回合中落盘（桌面 TurnFlusher；CLI 无操作）。
+    fn flush_turn(&mut self, session: &Session);
+    /// 工具是否需要确认（CLI 用 Option 规则；桌面从 Arc<Mutex> lock 读）。
+    fn needs_confirmation(
+        &self,
+        tool: &crate::tools::Tool,
+        args: &serde_json::Value,
+        work_dir: Option<&str>,
+    ) -> bool;
+    /// 事件发送通道 clone（工具直播输出转发用，ADR-037；CLI 无）。
+    fn event_tx_clone(&self) -> Option<tokio::sync::mpsc::UnboundedSender<AgentEvent>> {
+        None
+    }
+    /// 工具级取消标志（run_command 长命令中断；CLI 无）。
+    fn tool_cancel_flag(&self) -> Option<&std::sync::atomic::AtomicBool> {
+        None
+    }
+}
+
+/// CLI 渲染器：终端渲染 + dialoguer 确认门 + 无取消/无 flusher。
+struct CliRenderer {
+    skip_confirm: bool,
+    work_dir: Option<String>,
+    allow_rules: Option<crate::allow::AllowRules>,
+}
+
+impl CliRenderer {
+    fn new(
+        skip_confirm: bool,
+        work_dir: Option<&str>,
+        allow_rules: Option<&crate::allow::AllowRules>,
+    ) -> Self {
+        Self {
+            skip_confirm,
+            work_dir: work_dir.map(|s| s.to_string()),
+            allow_rules: allow_rules.cloned(),
+        }
+    }
+}
+
+impl ReactRenderer for CliRenderer {
+    fn on_interim_text(&mut self, text: &str) {
+        crate::render::render_message(text);
+    }
+    fn on_event(&mut self, _ev: AgentEvent) {}
+    async fn confirm_tool(&mut self, _tool: &str, _call_id: &str, message: &str) -> bool {
+        crate::render::dialog::confirm(message)
+    }
+    fn is_cancelled(&self) -> bool {
+        false
+    }
+    fn flush_turn(&mut self, _session: &Session) {}
+    fn needs_confirmation(
+        &self,
+        tool: &crate::tools::Tool,
+        args: &serde_json::Value,
+        work_dir: Option<&str>,
+    ) -> bool {
+        if self.skip_confirm {
+            return false;
+        }
+        tool.needs_confirmation(args, work_dir, self.allow_rules.as_ref())
+    }
+}
+
+/// 桌面渲染器：事件发送 + oneshot 确认门 + cancel_flag + TurnFlusher。
+struct DesktopRenderer<'a> {
+    confirm_pending: &'a Arc<
+        std::sync::Mutex<std::collections::HashMap<String, tokio::sync::oneshot::Sender<bool>>>,
+    >,
+    allow_rules: &'a Arc<std::sync::Mutex<crate::allow::AllowRules>>,
+    event_tx: &'a tokio::sync::mpsc::UnboundedSender<AgentEvent>,
+    cancel_flag: &'a std::sync::atomic::AtomicBool,
+    flusher: Option<&'a std::sync::Arc<std::sync::Mutex<persist::TurnFlusher>>>,
+}
+
+impl<'a> ReactRenderer for DesktopRenderer<'a> {
+    fn on_interim_text(&mut self, _text: &str) {
+        // 桌面文本经 on_event 的 Token 流式呈现，无需终端渲染。
+    }
+    fn on_event(&mut self, ev: AgentEvent) {
+        let _ = self.event_tx.send(ev);
+    }
+    async fn confirm_tool(&mut self, tool: &str, call_id: &str, message: &str) -> bool {
+        let confirm_id = format!("confirm-{call_id}");
+        let _ = self.event_tx.send(AgentEvent::ConfirmRequest {
+            id: confirm_id.clone(),
+            tool: tool.to_string(),
+            message: message.to_string(),
+        });
+        let (tx, rx) = tokio::sync::oneshot::channel::<bool>();
+        {
+            let mut guard = self.confirm_pending.lock().expect("confirm mutex poisoned");
+            guard.insert(confirm_id.clone(), tx);
+        }
+        match tokio::time::timeout(std::time::Duration::from_secs(60), rx).await {
+            Ok(Ok(true)) => true,
+            Ok(Ok(false)) | Ok(Err(_)) => false,
+            Err(_elapsed) => {
+                tracing::warn!(%confirm_id, "confirmation dialog timed out");
+                {
+                    let mut guard = self.confirm_pending.lock().expect("confirm mutex poisoned");
+                    guard.remove(&confirm_id);
+                }
+                false
+            }
+        }
+    }
+    fn is_cancelled(&self) -> bool {
+        self.cancel_flag.load(std::sync::atomic::Ordering::SeqCst)
+    }
+    fn flush_turn(&mut self, session: &Session) {
+        if let Some(f) = self.flusher {
+            flush_turn(Some(f), session);
+        }
+    }
+    fn needs_confirmation(
+        &self,
+        tool: &crate::tools::Tool,
+        args: &serde_json::Value,
+        work_dir: Option<&str>,
+    ) -> bool {
+        let rules = self.allow_rules.lock().expect("allow rules mutex poisoned");
+        tool.needs_confirmation(args, work_dir, Some(&rules))
+    }
+    fn event_tx_clone(&self) -> Option<tokio::sync::mpsc::UnboundedSender<AgentEvent>> {
+        Some(self.event_tx.clone())
+    }
+    fn tool_cancel_flag(&self) -> Option<&std::sync::atomic::AtomicBool> {
+        Some(self.cancel_flag)
+    }
+}
+
+/// 单一核心 ReAct 循环（CLI 与桌面共用——差异经 ReactRenderer 注入）。
 #[allow(clippy::too_many_arguments)]
-pub async fn run_react(
+async fn run_react_core<R: ReactRenderer>(
     session: &mut Session,
     api_base: &str,
     model: &str,
     api_key: &str,
     tools: &ToolRegistry,
     max_iterations: usize,
-    skip_confirm: bool,
     work_dir: Option<&str>,
-    allow_rules: Option<&crate::allow::AllowRules>,
+    renderer: &mut R,
 ) -> anyhow::Result<AgentResult> {
     let mut usage = tokens::TokenUsage::default();
     let tool_defs = build_openai_tools(tools);
     let native_tool_defs = tools.definitions();
     let mut tool_guard = guard::ToolCallGuard::new();
+    let ctx_limit = tokens::context_limit_for_model(model);
+    let soft_lim = persist::soft_token_limit(ctx_limit);
+    let hard_lim = persist::hard_token_limit(ctx_limit);
+    let keep_recent = context::ContextConfig::default().keep_recent;
+    let soft_state = context::SoftCompactState::new();
 
     // Pull archived context referenced by the latest user message back into hot.
     layers::promote_referenced_context(session);
 
     for iteration in 0..max_iterations {
+        // Check cancellation at start of each iteration
+        if renderer.is_cancelled() {
+            soft_state.invalidate();
+            renderer.on_event(AgentEvent::Error {
+                message: "cancelled".into(),
+            });
+            anyhow::bail!("cancelled");
+        }
+
         session.iteration = iteration;
         tracing::info!(iteration, msg_count = session.messages.len(), "agent loop");
 
-        // Compact context if we're approaching the token budget
-        context::maybe_compact_llm(
-            session,
-            &context::ContextConfig::default(),
-            Some(context::CompactLlm {
-                api_base,
-                model,
-                api_key,
-            }),
-        )
-        .await;
+        let est = tokens::estimate_messages(&session.messages);
+        let mut compacted = false;
+
+        // Hard compact (~85%): sync; prefer ready soft candidate as draft.
+        if est > hard_lim {
+            if let Some(cand) = soft_state.take_ready(session.epoch) {
+                compacted =
+                    context::apply_compact_with_summary(session, &cand.summary, keep_recent);
+            }
+            soft_state.invalidate();
+            if !compacted {
+                compacted = context::maybe_compact_llm(
+                    session,
+                    &context::ContextConfig {
+                        max_tokens: hard_lim,
+                        keep_recent,
+                    },
+                    Some(context::CompactLlm {
+                        api_base,
+                        model,
+                        api_key,
+                    }),
+                )
+                .await;
+            }
+            // Epoch may have bumped — rewrite + checkpoint on disk now so a
+            // crash does not strand the compacted state only in memory.
+            renderer.flush_turn(session);
+        }
+
+        // Defensive: DeepSeek-strict pairing / no consecutive assistants.
         context::repair_message_sequence(&mut session.messages);
 
-        // Estimate input tokens for this iteration
-        usage.input_tokens += tokens::estimate_messages(&session.messages);
+        // Estimate input tokens for this iteration (hard compact 后算一次，
+        // usage 累加 / 软压判断 / emit 传参共用——避免同值重复全量扫描)。
+        let est_after = tokens::estimate_messages(&session.messages);
+        usage.input_tokens += est_after;
+        emit_usage(
+            renderer,
+            iteration + 1,
+            &usage,
+            session,
+            model,
+            compacted,
+            session.layers.as_ref(),
+            est_after,
+        );
 
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
 
@@ -176,7 +365,20 @@ pub async fn run_react(
             }
         });
 
-        let response = collect_stream(&mut rx).await;
+        // Soft compact (~70%): run in parallel with the main LLM stream (ADR-036).
+        if est_after > soft_lim && est_after <= hard_lim && !soft_state.in_flight() {
+            soft_state.try_spawn(
+                session.messages.clone(),
+                session.epoch,
+                keep_recent,
+                soft_lim,
+                api_base.to_string(),
+                model.to_string(),
+                api_key.to_string(),
+            );
+        }
+
+        let response = collect_stream_events(&mut rx, renderer, &NEVER_CANCEL).await;
         llm_handle.await?;
 
         match classify_response(response, &native_tool_defs) {
@@ -188,14 +390,12 @@ pub async fn run_react(
                 if !text.is_empty() {
                     session.add_assistant_message(&text);
                 }
-                return Ok(make_result(text, iteration + 1, &usage, session, model));
+                let result = make_result(text.clone(), iteration + 1, &usage, session, model);
+                emit_done(renderer, &result, false);
+                return Ok(result);
             }
             ResponseType::ToolCalls { text, tool_calls } => {
                 usage.output_tokens += tokens::estimate_text(&text);
-                if !text.is_empty() {
-                    crate::render::render_message(&text);
-                }
-
                 let openai_tool_calls: Vec<ToolCall> = tool_calls
                     .iter()
                     .map(|tc| ToolCall {
@@ -212,21 +412,39 @@ pub async fn run_react(
 
                 let mut force_final = false;
                 for tc in &tool_calls {
+                    renderer.on_event(AgentEvent::ToolStart {
+                        name: tc.name.clone(),
+                        call_id: tc.id.clone(),
+                    });
+
                     let result = if tool_guard.should_block(&tc.name, &tc.arguments) {
                         tracing::warn!(tool = %tc.name, "blocked duplicate tool call");
                         force_final = tool_guard.should_force_final();
                         guard::ToolCallGuard::blocked_result(&tc.name)
                     } else {
-                        let result = execute_tool_with_confirm(
-                            tools,
-                            tc,
-                            skip_confirm,
-                            work_dir,
-                            allow_rules,
-                        )
-                        .await;
+                        let result =
+                            execute_tool_with_renderer(tools, tc, work_dir, renderer).await;
                         enrich_tool_observation(&tc.name, result)
                     };
+                    let result_str = serde_json::to_string(&result).unwrap_or_default();
+                    let summary = truncate_output(&result_str);
+                    // Benchmark metrics ride along structured (not just inside
+                    // the truncated summary JSON) so the UI/tests can read them.
+                    let metrics = result
+                        .get("metrics")
+                        .and_then(|m| {
+                            serde_json::from_value::<HashMap<String, f64>>(m.clone()).ok()
+                        })
+                        .filter(|m| !m.is_empty());
+                    renderer.on_event(AgentEvent::ToolDone {
+                        name: tc.name.clone(),
+                        call_id: tc.id.clone(),
+                        success: result_str.contains("\"success\":true")
+                            || result_str.contains("\"cancelled\":true"),
+                        summary,
+                        metrics,
+                    });
+
                     session.add_tool_result(tc.id.clone(), serde_json::to_string(&result)?);
                 }
                 if force_final {
@@ -234,15 +452,26 @@ pub async fn run_react(
                         "You are repeating the same tool call. Stop calling tools and write your final answer now.",
                     );
                 }
-            }
-            ResponseType::Empty => {
-                return Ok(make_result(
-                    String::new(),
+                // Crash-safe: tool calls + results of this batch hit disk now,
+                // not only at turn end.
+                renderer.flush_turn(session);
+                // Refresh context fill after tool results land.
+                let est_tool = tokens::estimate_messages(&session.messages);
+                emit_usage(
+                    renderer,
                     iteration + 1,
                     &usage,
                     session,
                     model,
-                ));
+                    false,
+                    session.layers.as_ref(),
+                    est_tool,
+                );
+            }
+            ResponseType::Empty => {
+                let result = make_result(String::new(), iteration + 1, &usage, session, model);
+                emit_done(renderer, &result, false);
+                return Ok(result);
             }
         }
     }
@@ -253,7 +482,18 @@ pub async fn run_react(
          Please provide a final summary.",
     );
 
-    usage.input_tokens += tokens::estimate_messages(&session.messages);
+    let est_final = tokens::estimate_messages(&session.messages);
+    usage.input_tokens += est_final;
+    emit_usage(
+        renderer,
+        max_iterations,
+        &usage,
+        session,
+        model,
+        false,
+        session.layers.as_ref(),
+        est_final,
+    );
 
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     let request = LlmRequest {
@@ -269,21 +509,57 @@ pub async fn run_react(
         let _ = llm::stream_chat(request, tx).await;
     });
 
-    let response = collect_stream(&mut rx).await;
-    match classify_response(response, &native_tool_defs) {
+    let response = collect_stream_events(&mut rx, renderer, &NEVER_CANCEL).await;
+    let result = match classify_response(response, &native_tool_defs) {
         ResponseType::ApiError(msg) => anyhow::bail!("{msg}"),
         ResponseType::TextOnly(text) | ResponseType::ToolCalls { text, .. } => {
             usage.output_tokens += tokens::estimate_text(&text);
-            Ok(make_result(text, max_iterations, &usage, session, model))
+            make_result(text, max_iterations, &usage, session, model)
         }
-        ResponseType::Empty => Ok(make_result(
+        ResponseType::Empty => make_result(
             "Max iterations reached.".into(),
             max_iterations,
             &usage,
             session,
             model,
-        )),
-    }
+        ),
+    };
+    emit_done(renderer, &result, true);
+    Ok(result)
+}
+
+/// collect_stream_events 的取消占位——collect 阶段的中断由
+/// renderer.is_cancelled() 驱动（桌面 renderer 内部转发此标志）。
+static NEVER_CANCEL: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Run the ReAct agent loop for a single task.
+///
+/// `work_dir` / `allow_rules` feed the confirm gate (outside-workspace reads
+/// and persisted allow rules). Ignored when `skip_confirm` is set.
+#[allow(clippy::too_many_arguments)]
+pub async fn run_react(
+    session: &mut Session,
+    api_base: &str,
+    model: &str,
+    api_key: &str,
+    tools: &ToolRegistry,
+    max_iterations: usize,
+    skip_confirm: bool,
+    work_dir: Option<&str>,
+    allow_rules: Option<&crate::allow::AllowRules>,
+) -> anyhow::Result<AgentResult> {
+    let mut renderer = CliRenderer::new(skip_confirm, work_dir, allow_rules);
+    run_react_core(
+        session,
+        api_base,
+        model,
+        api_key,
+        tools,
+        max_iterations,
+        work_dir,
+        &mut renderer,
+    )
+    .await
 }
 
 // -- Internal helpers --
@@ -314,14 +590,23 @@ enum ResponseType {
 ///
 /// We strip them after the stream completes (before classification) so the
 /// UI can still show reasoning in real time via streaming tokens.
+/// 每迭代必跑的三个正则——LazyLock 静态化（不再每次 Regex::new 重编译）。
+static RE_THINK: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+    regex::Regex::new(r"(?s)<think>.*?</think>|<\|begin_of_thought\|>.*?<\|end_of_thought\|>")
+        .unwrap()
+});
+static RE_TEXT_TOOL_CALL: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+    regex::Regex::new(r#"(\w+)\s*\(\s*"((?:[^"\\]|\\.)*)"(?:\s*,\s*"((?:[^"\\]|\\.)*)")?\s*\)"#)
+        .unwrap()
+});
+static RE_MULTI_BLANK: std::sync::LazyLock<regex::Regex> =
+    std::sync::LazyLock::new(|| regex::Regex::new(r"\n{3,}").unwrap());
+
 fn strip_thinking(text: &str) -> String {
     // Simple regex-based approach: remove content between think tags.
     // Handles Qwen3: <think>...</think>
     // Handles DeepSeek-R1: <|begin_of_thought|>...<|end_of_thought|>
-    let re =
-        regex::Regex::new(r"(?s)<think>.*?</think>|<\|begin_of_thought\|>.*?<\|end_of_thought\|>")
-            .unwrap();
-    re.replace_all(text, "").trim().to_string()
+    RE_THINK.replace_all(text, "").trim().to_string()
 }
 
 /// Parse text-format tool calls from model output when the model doesn't support
@@ -339,10 +624,7 @@ fn parse_text_tool_calls(
     tool_defs: &[ToolDef],
 ) -> (String, Vec<llm::stream::CompletedToolCall>) {
     // Match: name("arg1"[, "arg2"[, ...]]) - positional quoted-arg calls
-    let re = regex::Regex::new(
-        r#"(\w+)\s*\(\s*"((?:[^"\\]|\\.)*)"(?:\s*,\s*"((?:[^"\\]|\\.)*)")?\s*\)"#,
-    )
-    .unwrap();
+    let re = &*RE_TEXT_TOOL_CALL;
 
     let mut call_id_counter = 0u32;
     let mut tool_calls: Vec<llm::stream::CompletedToolCall> = Vec::new();
@@ -411,8 +693,7 @@ fn parse_text_tool_calls(
     }
 
     // Clean up: collapse multiple blank lines, trim
-    let cleaned = regex::Regex::new(r"\n{3,}")
-        .unwrap()
+    let cleaned = RE_MULTI_BLANK
         .replace_all(&remaining, "\n\n")
         .trim()
         .to_string();
@@ -454,46 +735,6 @@ fn classify_response(raw: RawResponse, tool_defs: &[ToolDef]) -> ResponseType {
         ResponseType::Empty
     } else {
         ResponseType::TextOnly(text)
-    }
-}
-
-async fn collect_stream(rx: &mut tokio::sync::mpsc::UnboundedReceiver<StreamEvent>) -> RawResponse {
-    let mut text = String::new();
-    let mut tool_calls: Vec<llm::stream::CompletedToolCall> = Vec::new();
-
-    while let Some(event) = rx.recv().await {
-        match event {
-            StreamEvent::Token(t) => {
-                text.push_str(&t);
-                crate::render::render_token(&t);
-            }
-            StreamEvent::ToolCall {
-                id,
-                name,
-                arguments,
-            } => {
-                crate::render::render_tool_status(&name, true);
-                tool_calls.push(llm::stream::CompletedToolCall {
-                    id,
-                    name,
-                    arguments,
-                });
-            }
-            StreamEvent::Done => break,
-            StreamEvent::Error(msg) => {
-                eprintln!("\n  {msg}");
-            }
-        }
-    }
-
-    if !text.is_empty() {
-        println!();
-    }
-
-    RawResponse {
-        text,
-        tool_calls,
-        error: None,
     }
 }
 
@@ -543,260 +784,24 @@ pub async fn run_react_streaming(
     cancel_flag: &std::sync::atomic::AtomicBool,
     flusher: Option<&std::sync::Arc<std::sync::Mutex<persist::TurnFlusher>>>,
 ) -> anyhow::Result<AgentResult> {
-    let mut usage = tokens::TokenUsage::default();
-    let tool_defs = build_openai_tools(tools);
-    let native_tool_defs = tools.definitions();
-    let mut tool_guard = guard::ToolCallGuard::new();
-    let ctx_limit = tokens::context_limit_for_model(model);
-    let soft_lim = persist::soft_token_limit(ctx_limit);
-    let hard_lim = persist::hard_token_limit(ctx_limit);
-    let keep_recent = context::ContextConfig::default().keep_recent;
-    let soft_state = context::SoftCompactState::new();
-
-    // Pull archived context referenced by the latest user message back into hot.
-    layers::promote_referenced_context(session);
-
-    for iteration in 0..max_iterations {
-        // Check cancellation at start of each iteration
-        if cancel_flag.load(std::sync::atomic::Ordering::SeqCst) {
-            soft_state.invalidate();
-            let _ = event_tx.send(AgentEvent::Error {
-                message: "cancelled".into(),
-            });
-            anyhow::bail!("cancelled");
-        }
-
-        session.iteration = iteration;
-        tracing::info!(iteration, msg_count = session.messages.len(), "agent loop");
-
-        let est = tokens::estimate_messages(&session.messages);
-        let mut compacted = false;
-
-        // Hard compact (~85%): sync; prefer ready soft candidate as draft.
-        if est > hard_lim {
-            if let Some(cand) = soft_state.take_ready(session.epoch) {
-                compacted =
-                    context::apply_compact_with_summary(session, &cand.summary, keep_recent);
-            }
-            soft_state.invalidate();
-            if !compacted {
-                compacted = context::maybe_compact_llm(
-                    session,
-                    &context::ContextConfig {
-                        max_tokens: hard_lim,
-                        keep_recent,
-                    },
-                    Some(context::CompactLlm {
-                        api_base,
-                        model,
-                        api_key,
-                    }),
-                )
-                .await;
-            }
-            // Epoch may have bumped — rewrite + checkpoint on disk now so a
-            // crash does not strand the compacted state only in memory.
-            flush_turn(flusher, session);
-        }
-
-        // Defensive: DeepSeek-strict pairing / no consecutive assistants.
-        context::repair_message_sequence(&mut session.messages);
-
-        // Estimate input tokens for this iteration
-        usage.input_tokens += tokens::estimate_messages(&session.messages);
-        emit_usage(
-            event_tx,
-            iteration + 1,
-            &usage,
-            session,
-            model,
-            compacted,
-            session.layers.as_ref(),
-        );
-
-        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-
-        let request = LlmRequest {
-            api_base: api_base.to_string(),
-            model: model.to_string(),
-            api_key: api_key.to_string(),
-            messages: session.messages.clone(),
-            max_tokens: 4096,
-            tools: Some(tool_defs.clone()),
-        };
-
-        let llm_handle = tokio::spawn(async move {
-            if let Err(e) = llm::stream_chat(request, tx).await {
-                tracing::error!(%e, "LLM streaming failed");
-            }
-        });
-
-        // Soft compact (~70%): run in parallel with the main LLM stream (ADR-036).
-        let est_now = tokens::estimate_messages(&session.messages);
-        if est_now > soft_lim && est_now <= hard_lim && !soft_state.in_flight() {
-            soft_state.try_spawn(
-                session.messages.clone(),
-                session.epoch,
-                keep_recent,
-                soft_lim,
-                api_base.to_string(),
-                model.to_string(),
-                api_key.to_string(),
-            );
-        }
-
-        let response = collect_stream_events(&mut rx, event_tx, cancel_flag).await;
-        llm_handle.await?;
-
-        match classify_response(response, &native_tool_defs) {
-            ResponseType::ApiError(msg) => {
-                anyhow::bail!("{msg}");
-            }
-            ResponseType::TextOnly(text) => {
-                usage.output_tokens += tokens::estimate_text(&text);
-                if !text.is_empty() {
-                    session.add_assistant_message(&text);
-                }
-                let result = make_result(text.clone(), iteration + 1, &usage, session, model);
-                emit_done(event_tx, &result, false);
-                return Ok(result);
-            }
-            ResponseType::ToolCalls { text, tool_calls } => {
-                usage.output_tokens += tokens::estimate_text(&text);
-                let openai_tool_calls: Vec<ToolCall> = tool_calls
-                    .iter()
-                    .map(|tc| ToolCall {
-                        id: tc.id.clone(),
-                        call_type: "function".into(),
-                        function: session::FunctionCall {
-                            name: tc.name.clone(),
-                            arguments: tc.arguments.clone(),
-                        },
-                    })
-                    .collect();
-
-                session.add_assistant_tool_calls(text, openai_tool_calls);
-
-                let mut force_final = false;
-                for tc in &tool_calls {
-                    let _ = event_tx.send(AgentEvent::ToolStart {
-                        name: tc.name.clone(),
-                        call_id: tc.id.clone(),
-                    });
-
-                    let result = if tool_guard.should_block(&tc.name, &tc.arguments) {
-                        tracing::warn!(tool = %tc.name, "blocked duplicate tool call");
-                        force_final = tool_guard.should_force_final();
-                        guard::ToolCallGuard::blocked_result(&tc.name)
-                    } else {
-                        let result = execute_tool_with_confirm_desktop(
-                            tools,
-                            tc,
-                            &confirm_pending,
-                            work_dir,
-                            &allow_rules,
-                            event_tx,
-                            cancel_flag,
-                        )
-                        .await;
-                        enrich_tool_observation(&tc.name, result)
-                    };
-                    let result_str = serde_json::to_string(&result).unwrap_or_default();
-                    let summary = truncate_output(&result_str);
-                    // Benchmark metrics ride along structured (not just inside
-                    // the truncated summary JSON) so the UI/tests can read them.
-                    let metrics = result
-                        .get("metrics")
-                        .and_then(|m| {
-                            serde_json::from_value::<HashMap<String, f64>>(m.clone()).ok()
-                        })
-                        .filter(|m| !m.is_empty());
-                    let _ = event_tx.send(AgentEvent::ToolDone {
-                        name: tc.name.clone(),
-                        call_id: tc.id.clone(),
-                        success: result_str.contains("\"success\":true")
-                            || result_str.contains("\"cancelled\":true"),
-                        summary,
-                        metrics,
-                    });
-
-                    session.add_tool_result(tc.id.clone(), serde_json::to_string(&result)?);
-                }
-                if force_final {
-                    session.add_user_message(
-                        "You are repeating the same tool call. Stop calling tools and write your final answer now.",
-                    );
-                }
-                // Crash-safe: tool calls + results of this batch hit disk now,
-                // not only at turn end.
-                flush_turn(flusher, session);
-                // Refresh context fill after tool results land.
-                emit_usage(
-                    event_tx,
-                    iteration + 1,
-                    &usage,
-                    session,
-                    model,
-                    false,
-                    session.layers.as_ref(),
-                );
-            }
-            ResponseType::Empty => {
-                let result = make_result(String::new(), iteration + 1, &usage, session, model);
-                emit_done(event_tx, &result, false);
-                return Ok(result);
-            }
-        }
-    }
-
-    // Max iterations — force final response
-    session.add_user_message(
-        "You have reached the maximum number of iterations. \
-         Please provide a final summary.",
-    );
-
-    usage.input_tokens += tokens::estimate_messages(&session.messages);
-    emit_usage(
+    let mut renderer = DesktopRenderer {
+        confirm_pending: &confirm_pending,
+        allow_rules: &allow_rules,
         event_tx,
-        max_iterations,
-        &usage,
+        cancel_flag,
+        flusher,
+    };
+    run_react_core(
         session,
+        api_base,
         model,
-        false,
-        session.layers.as_ref(),
-    );
-
-    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-    let request = LlmRequest {
-        api_base: api_base.to_string(),
-        model: model.to_string(),
-        api_key: api_key.to_string(),
-        messages: session.messages.clone(),
-        max_tokens: 2048,
-        tools: None,
-    };
-
-    tokio::spawn(async move {
-        let _ = llm::stream_chat(request, tx).await;
-    });
-
-    let response = collect_stream_events(&mut rx, event_tx, cancel_flag).await;
-    let result = match classify_response(response, &native_tool_defs) {
-        ResponseType::ApiError(msg) => anyhow::bail!("{msg}"),
-        ResponseType::TextOnly(text) | ResponseType::ToolCalls { text, .. } => {
-            usage.output_tokens += tokens::estimate_text(&text);
-            make_result(text, max_iterations, &usage, session, model)
-        }
-        ResponseType::Empty => make_result(
-            "Max iterations reached.".into(),
-            max_iterations,
-            &usage,
-            session,
-            model,
-        ),
-    };
-    emit_done(event_tx, &result, true);
-    Ok(result)
+        api_key,
+        tools,
+        max_iterations,
+        work_dir,
+        &mut renderer,
+    )
+    .await
 }
 
 fn make_result(
@@ -819,19 +824,20 @@ fn make_result(
     }
 }
 
-fn emit_usage(
-    event_tx: &tokio::sync::mpsc::UnboundedSender<AgentEvent>,
+#[allow(clippy::too_many_arguments)] // 内部 helper，context 数据直传
+fn emit_usage<R: ReactRenderer>(
+    renderer: &mut R,
     iteration: usize,
     usage: &tokens::TokenUsage,
     session: &Session,
     model: &str,
     compacted: bool,
     layer_manager: Option<&layers::LayerManager>,
+    context_tokens: usize,
 ) {
     let context_limit = tokens::context_limit_for_model(model);
-    let context_tokens = tokens::estimate_messages(&session.messages);
     let layers = layer_manager.map(|lm| lm.estimate_stats(&session.messages, context_limit));
-    let _ = event_tx.send(AgentEvent::Usage {
+    renderer.on_event(AgentEvent::Usage {
         iteration,
         input_tokens: usage.input_tokens,
         output_tokens: usage.output_tokens,
@@ -854,12 +860,8 @@ fn flush_turn(
     }
 }
 
-fn emit_done(
-    event_tx: &tokio::sync::mpsc::UnboundedSender<AgentEvent>,
-    result: &AgentResult,
-    hit_iteration_cap: bool,
-) {
-    let _ = event_tx.send(AgentEvent::Done {
+fn emit_done<R: ReactRenderer>(renderer: &mut R, result: &AgentResult, hit_iteration_cap: bool) {
+    renderer.on_event(AgentEvent::Done {
         response: result.response.clone(),
         iterations: result.iterations,
         input_tokens: result.input_tokens,
@@ -870,9 +872,9 @@ fn emit_done(
     });
 }
 
-async fn collect_stream_events(
+async fn collect_stream_events<R: ReactRenderer>(
     rx: &mut tokio::sync::mpsc::UnboundedReceiver<StreamEvent>,
-    event_tx: &tokio::sync::mpsc::UnboundedSender<AgentEvent>,
+    renderer: &mut R,
     cancel_flag: &std::sync::atomic::AtomicBool,
 ) -> RawResponse {
     use std::sync::atomic::Ordering;
@@ -885,7 +887,8 @@ async fn collect_stream_events(
                 match event {
                     Some(StreamEvent::Token(t)) => {
                         text.push_str(&t);
-                        let _ = event_tx.send(AgentEvent::Token { text: t });
+                        renderer.on_interim_text(&t);
+                        renderer.on_event(AgentEvent::Token { text: t });
                     }
                     Some(StreamEvent::ToolCall {
                         id,
@@ -900,7 +903,7 @@ async fn collect_stream_events(
                     }
                     Some(StreamEvent::Done) => break,
                     Some(StreamEvent::Error(msg)) => {
-                        let _ = event_tx.send(AgentEvent::Error {
+                        renderer.on_event(AgentEvent::Error {
                             message: msg.clone(),
                         });
                         // Stop collecting — a 4xx leaves the channel empty next;
@@ -1086,12 +1089,13 @@ fn truncate_output(json: &str) -> String {
     }
 }
 
-async fn execute_tool_with_confirm(
+/// 工具执行（CLI/桌面共用——确认门经 renderer 注入）：
+/// 解析 → scrub 内部标记 → 越界/确认判定 → scoped 标记注入 → 执行。
+async fn execute_tool_with_renderer<R: ReactRenderer>(
     registry: &ToolRegistry,
     tc: &llm::stream::CompletedToolCall,
-    skip_confirm: bool,
     work_dir: Option<&str>,
-    allow_rules: Option<&crate::allow::AllowRules>,
+    renderer: &mut R,
 ) -> serde_json::Value {
     let tool = match registry.get(&tc.name) {
         Some(t) => t,
@@ -1111,109 +1115,19 @@ async fn execute_tool_with_confirm(
     // `__stitch_scoped` is re-injected below only after approval / rule match.
     let args = tools::scrub_scoped_marker(&raw_args);
     let outside = tool.scoped_read_target(&args, work_dir);
-    let needs = tool.needs_confirmation(&args, work_dir, allow_rules);
+    let needs = renderer.needs_confirmation(tool, &args, work_dir);
     let mut exec_args = args;
 
-    if !skip_confirm && needs {
-        let desc = match &outside {
-            Some(p) => format!("Read outside workspace: {}\nAllow?", p.display()),
-            None => tool.confirm_message(&exec_args),
-        };
-        if !crate::render::dialog::confirm(&desc) {
-            return serde_json::json!({
-                "cancelled": true,
-                "message": "User denied the operation."
-            });
-        }
-    }
-    if outside.is_some() {
-        exec_args[crate::allow::SCOPED_MARKER] = serde_json::json!(true);
-    }
-
-    match tool.execute(exec_args).await {
-        Ok(result) => serde_json::json!({
-            "success": result.success,
-            "output": result.output,
-        }),
-        Err(e) => serde_json::json!({"error": format!("{e:#}")}),
-    }
-}
-
-/// Desktop variant: use event-based confirmation instead of dialoguer.
-async fn execute_tool_with_confirm_desktop(
-    registry: &ToolRegistry,
-    tc: &llm::stream::CompletedToolCall,
-    confirm_pending: &Arc<
-        std::sync::Mutex<std::collections::HashMap<String, tokio::sync::oneshot::Sender<bool>>>,
-    >,
-    work_dir: Option<&str>,
-    allow_rules: &Arc<std::sync::Mutex<crate::allow::AllowRules>>,
-    event_tx: &tokio::sync::mpsc::UnboundedSender<AgentEvent>,
-    cancel_flag: &std::sync::atomic::AtomicBool,
-) -> serde_json::Value {
-    let tool = match registry.get(&tc.name) {
-        Some(t) => t,
-        None => {
-            return serde_json::json!({"error": format!("Unknown tool: {}", tc.name)});
-        }
-    };
-
-    let raw_args: serde_json::Value = match serde_json::from_str(&tc.arguments) {
-        Ok(v) => v,
-        Err(e) => {
-            return serde_json::json!({"error": format!("Invalid arguments: {e}")});
-        }
-    };
-
-    // Scrub the internal marker so a model-invented key cannot self-authorize;
-    // `__stitch_scoped` is re-injected below only after approval / rule match.
-    let args = tools::scrub_scoped_marker(&raw_args);
-    let outside = tool.scoped_read_target(&args, work_dir);
-
-    // Lock briefly for the decision only — never while awaiting the user.
-    let needs = {
-        let rules = allow_rules.lock().expect("allow rules mutex poisoned");
-        tool.needs_confirmation(&args, work_dir, Some(&rules))
-    };
-
-    let mut exec_args = args;
     if needs {
         let desc = match &outside {
-            Some(p) => format!("Read outside workspace: {}\nAllow?", p.display()),
+            Some(p) => format!(
+                "Read outside workspace: {}
+Allow?",
+                p.display()
+            ),
             None => tool.confirm_message(&exec_args),
         };
-        let confirm_id = format!("confirm-{}", tc.id);
-
-        // Send confirmation request to frontend
-        let _ = event_tx.send(AgentEvent::ConfirmRequest {
-            id: confirm_id.clone(),
-            tool: tc.name.clone(),
-            message: desc.clone(),
-        });
-
-        // Wait for user response
-        let (tx, rx) = tokio::sync::oneshot::channel::<bool>();
-        {
-            let mut guard = confirm_pending.lock().expect("confirm mutex poisoned");
-            guard.insert(confirm_id.clone(), tx);
-        }
-
-        let approved = match tokio::time::timeout(std::time::Duration::from_secs(60), rx).await {
-            Ok(Ok(true)) => true,
-            Ok(Ok(false)) | Ok(Err(_)) => false,
-            Err(_elapsed) => {
-                tracing::warn!(%confirm_id, "confirmation dialog timed out");
-                {
-                    let mut guard = confirm_pending.lock().expect("confirm mutex poisoned");
-                    guard.remove(&confirm_id);
-                }
-                return serde_json::json!({
-                    "cancelled": true,
-                    "message": "Confirmation timed out after 60 seconds."
-                });
-            }
-        };
-        if !approved {
+        if !renderer.confirm_tool(&tc.name, &tc.id, &desc).await {
             return serde_json::json!({
                 "cancelled": true,
                 "message": "User denied the operation."
@@ -1224,93 +1138,40 @@ async fn execute_tool_with_confirm_desktop(
         exec_args[crate::allow::SCOPED_MARKER] = serde_json::json!(true);
     }
 
-    // ADR-037: forward live tool output lines to the UI as they arrive.
+    // ADR-037 直播输出：run_command 逐行经转发任务推 ToolOutput 事件。
     let (prog_tx, mut prog_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
-    let fwd_name = tc.name.clone();
-    let fwd_call_id = tc.id.clone();
-    let fwd_tx = event_tx.clone();
-    let fwd = tokio::spawn(async move {
-        while let Some(text) = prog_rx.recv().await {
-            let _ = fwd_tx.send(AgentEvent::ToolOutput {
-                name: fwd_name.clone(),
-                call_id: fwd_call_id.clone(),
-                text,
-            });
-        }
-    });
+    if let Some(fwd_tx) = renderer.event_tx_clone() {
+        let name = tc.name.clone();
+        let call_id = tc.id.clone();
+        tokio::spawn(async move {
+            while let Some(line) = prog_rx.recv().await {
+                let _ = fwd_tx.send(AgentEvent::ToolOutput {
+                    name: name.clone(),
+                    call_id: call_id.clone(),
+                    text: line,
+                });
+            }
+        });
+    } else {
+        drop(prog_rx);
+    }
 
-    let exec_result = tool
-        .execute_with_progress(exec_args, Some(prog_tx), Some(cancel_flag))
-        .await;
-    // prog_tx dropped here → forward task drains and exits. Bound the wait:
-    // a misbehaving tool must never wedge the agent loop on the forwarder.
-    let _ = tokio::time::timeout(std::time::Duration::from_secs(3), fwd).await;
-
-    match exec_result {
-        // Serialize the full ToolResult so benchmark metrics (duration_ms)
-        // survive the confirm gate — hand-rolled {success, output} dropped them.
-        Ok(result) => tool_result_json(result),
+    let cancel_flag = renderer.tool_cancel_flag();
+    match tool
+        .execute_with_progress(exec_args, Some(prog_tx), cancel_flag)
+        .await
+    {
+        // 完整序列化（含 metrics——旧 confirm gate 手写 {success, output}
+        // 曾静默丢弃 benchmark 指标，回归测试 tool_result_json_keeps_metrics 兜底）。
+        Ok(result) => serde_json::to_value(&result).unwrap_or_default(),
         Err(e) => serde_json::json!({"error": format!("{e:#}")}),
     }
-}
-
-/// Full ToolResult serialization (success/output/metrics) for agent events.
-fn tool_result_json(result: crate::tools::ToolResult) -> serde_json::Value {
-    serde_json::to_value(&result).unwrap_or_else(
-        |_| serde_json::json!({"success": false, "output": "tool result serialization failed"}),
-    )
 }
 
 #[cfg(test)]
-mod truncate_output_tests {
-    use super::{enrich_tool_observation, tool_result_json, truncate_output, truncate_str_bytes};
+mod tests {
+    use super::{enrich_tool_observation, truncate_output};
 
-    #[test]
-    fn tool_result_json_keeps_metrics() {
-        // Regression: the confirm gate used to rebuild {success, output} by
-        // hand, silently dropping benchmark metrics (duration_ms).
-        let mut m = std::collections::HashMap::new();
-        m.insert("duration_ms".into(), 42.5);
-        let r = crate::tools::ToolResult {
-            success: true,
-            output: "done".into(),
-            metrics: Some(m),
-        };
-        let v = tool_result_json(r);
-        assert_eq!(v["success"], true);
-        assert_eq!(v["output"], "done");
-        assert_eq!(v["metrics"]["duration_ms"], 42.5);
-    }
-
-    #[test]
-    fn tool_result_json_without_metrics_omits_key() {
-        let r = crate::tools::ToolResult {
-            success: false,
-            output: "boom".into(),
-            metrics: None,
-        };
-        let v = tool_result_json(r);
-        assert_eq!(v["success"], false);
-        assert!(v.get("metrics").is_none());
-    }
-
-    #[test]
-    fn truncate_str_bytes_respects_cjk_boundaries() {
-        // "证" is 3 bytes; a naive ..497 slice panicked on this shape in production.
-        let mut s = String::new();
-        while s.len() < 495 {
-            s.push('测');
-        }
-        s.push('证');
-        s.push_str("明剩余");
-        assert!(s.len() > 497);
-        let cut = truncate_str_bytes(&s, 497);
-        assert!(cut.is_char_boundary(cut.len()));
-        assert!(!cut.contains('\u{FFFD}'));
-        assert!(cut.ends_with('证') || cut.chars().next_back() == Some('测'));
-    }
-
-    #[test]
     fn truncate_output_keeps_output_under_20kb_verbatim() {
         let line = "审查验收证明".repeat(80); // multi-byte, under 20KB
         let json = serde_json::json!({
@@ -1340,6 +1201,24 @@ mod truncate_output_tests {
         assert!(summary.starts_with("[…前 "), "marker: {summary}");
         assert!(!summary.contains('\u{FFFD}'));
         assert!(summary.len() <= 20_000 + 64);
+    }
+
+    #[test]
+    fn tool_result_json_keeps_metrics() {
+        // 回归：confirm gate 曾手写 {success, output} 静默丢弃 benchmark
+        // metrics——ToolResult 完整序列化必须保留 duration_ms。
+        let r = crate::tools::ToolResult {
+            metrics: Some(std::collections::HashMap::from([(
+                "duration_ms".to_string(),
+                123.4,
+            )])),
+            success: true,
+            output: "done".to_string(),
+        };
+        let v = serde_json::to_value(&r).unwrap();
+        assert_eq!(v["metrics"]["duration_ms"], 123.4);
+        assert_eq!(v["success"], true);
+        assert_eq!(v["output"], "done");
     }
 
     #[test]

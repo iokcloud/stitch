@@ -57,11 +57,9 @@ impl WebFetch {
 
         // Only allow http/https
         if !url.starts_with("http://") && !url.starts_with("https://") {
-            return Ok(ToolResult {
-                metrics: None,
-                success: false,
-                output: "Only http:// and https:// URLs are supported.".into(),
-            });
+            return Ok(ToolResult::fail(
+                "Only http:// and https:// URLs are supported.",
+            ));
         }
 
         let client = reqwest::Client::builder()
@@ -83,11 +81,7 @@ impl WebFetch {
         let resp = match req.send().await {
             Ok(r) => r,
             Err(e) => {
-                return Ok(ToolResult {
-                    metrics: None,
-                    success: false,
-                    output: format!("Request failed: {e}"),
-                });
+                return Ok(ToolResult::fail(format!("Request failed: {e}")));
             }
         };
 
@@ -103,11 +97,9 @@ impl WebFetch {
         let bytes = match resp.bytes().await {
             Ok(b) => b,
             Err(e) => {
-                return Ok(ToolResult {
-                    metrics: None,
-                    success: false,
-                    output: format!("Failed to read response body: {e}"),
-                });
+                return Ok(ToolResult::fail(format!(
+                    "Failed to read response body: {e}"
+                )));
             }
         };
 
@@ -115,21 +107,15 @@ impl WebFetch {
 
         if truncated {
             let body = String::from_utf8_lossy(&bytes[..MAX_RESPONSE_BYTES]);
-            Ok(ToolResult {
-                metrics: None,
-                success: true,
-                output: format!(
-                    "Status: {status}\nContent-Type: {content_type}\n\n{body}\n\n[... truncated at {MAX_RESPONSE_BYTES} bytes, total {} bytes]",
-                    bytes.len()
-                ),
-            })
+            Ok(ToolResult::ok(format!(
+                "Status: {status}\nContent-Type: {content_type}\n\n{body}\n\n[... truncated at {MAX_RESPONSE_BYTES} bytes, total {} bytes]",
+                bytes.len()
+            )))
         } else {
             let body = String::from_utf8_lossy(&bytes);
-            Ok(ToolResult {
-                metrics: None,
-                success: true,
-                output: format!("Status: {status}\nContent-Type: {content_type}\n\n{body}"),
-            })
+            Ok(ToolResult::ok(format!(
+                "Status: {status}\nContent-Type: {content_type}\n\n{body}"
+            )))
         }
     }
 }

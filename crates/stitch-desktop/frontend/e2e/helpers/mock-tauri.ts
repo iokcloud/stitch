@@ -7,6 +7,8 @@ export type MockTauriOptions = {
   workDir?: string;
   /** Simulate token → done agent stream for send_message. */
   streamChat?: boolean;
+  /** Done 回复内容定制（默认「流式回复完成…」短文——长文场景测试用）。 */
+  streamDoneReply?: string;
   /** Slow tokens so stop can interrupt. */
   streamSlow?: boolean;
   /** Emit a running tool then hang until cancel (tests stop clears spinner). */
@@ -56,6 +58,7 @@ export async function mockTauri(page: Page, opts: MockTauriOptions = {}) {
   const apiTokenSet = opts.apiTokenSet ?? false;
   const workDir = opts.workDir ?? "C:/tmp/stitch-e2e";
   const streamChat = opts.streamChat ?? false;
+  const streamDoneReply = opts.streamDoneReply;
   const streamSlow = opts.streamSlow ?? false;
   const streamRunningTool = opts.streamRunningTool ?? false;
   const streamToolOutput = opts.streamToolOutput ?? false;
@@ -82,6 +85,7 @@ export async function mockTauri(page: Page, opts: MockTauriOptions = {}) {
       apiTokenSet: tokenSet,
       workDir: dir,
       streamChat: doStream,
+      streamDoneReply: doneReply,
       streamSlow: slow,
       streamRunningTool: hangTool,
       streamToolOutput: liveTool,
@@ -430,7 +434,7 @@ export async function mockTauri(page: Page, opts: MockTauriOptions = {}) {
         }
         const response = htmlReply
           ? "<p>安全内容</p><script>alert(1)</script><p>尾部</p>"
-          : "流式回复完成。已整理本次任务要点，便于你复用到个人库或下次会话。";
+          : (doneReply ?? "流式回复完成。已整理本次任务要点，便于你复用到个人库或下次会话。");
         emitAgent({
           type: "done",
           response,
@@ -1229,7 +1233,7 @@ export async function mockTauri(page: Page, opts: MockTauriOptions = {}) {
               return snapshot();
             }
             case "send_message": {
-              const planMode = !!(args?.planMode ?? args?.plan_mode);
+              const planMode = (args?.planMode ?? args?.plan_mode) === "on";
               const hist = args?.history;
               const internals = (window as unknown as { __TAURI_INTERNALS__: Record<string, unknown> })
                 .__TAURI_INTERNALS__;
@@ -1343,6 +1347,7 @@ export async function mockTauri(page: Page, opts: MockTauriOptions = {}) {
       apiTokenSet,
       workDir,
       streamChat,
+      streamDoneReply,
       streamSlow,
       streamRunningTool,
       streamToolOutput,

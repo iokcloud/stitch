@@ -1,6 +1,6 @@
-// Allow dead_code — many types are consumed only by stitch-desktop or external callers.
 #![allow(dead_code)]
 
+// Allow dead_code — many types are consumed only by stitch-desktop or external callers.
 mod agent;
 mod allow;
 mod auth;

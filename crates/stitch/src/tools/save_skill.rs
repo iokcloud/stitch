@@ -72,39 +72,25 @@ impl SaveSkill {
             .trim();
 
         if name.is_empty() || title.is_empty() || description.is_empty() {
-            return Ok(ToolResult {
-                metrics: None,
-                success: false,
-                output: "参数 name、title、description 均不能为空".into(),
-            });
+            return Ok(ToolResult::fail("参数 name、title、description 均不能为空"));
         }
 
         let messages_path = match find_latest_messages_jsonl(&self.work_dir) {
             Ok(Some(p)) => p,
             Ok(None) => {
-                return Ok(ToolResult { metrics: None,
-                    success: false,
-                    output: "未找到会话记录。请先完成一次对话，或确认工作区下存在 .stitch/sessions/ 目录。"
-                        .into(),
-                });
+                return Ok(ToolResult::fail(
+                    "未找到会话记录。请先完成一次对话，或确认工作区下存在 .stitch/sessions/ 目录。",
+                ));
             }
             Err(e) => {
-                return Ok(ToolResult {
-                    metrics: None,
-                    success: false,
-                    output: format!("读取会话失败：{e}"),
-                });
+                return Ok(ToolResult::fail(format!("读取会话失败：{e}")));
             }
         };
 
         let messages = match read_messages_jsonl(&messages_path) {
             Ok(msgs) => msgs,
             Err(e) => {
-                return Ok(ToolResult {
-                    metrics: None,
-                    success: false,
-                    output: format!("解析会话消息失败：{e}"),
-                });
+                return Ok(ToolResult::fail(format!("解析会话消息失败：{e}")));
             }
         };
 

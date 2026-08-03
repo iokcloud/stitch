@@ -65,15 +65,53 @@ export async function ensureChat() {
   await $('[data-testid="chat-view"]').waitForExist({ timeout: 15_000 });
 }
 
-export async function bootChat() {
+/**
+ * 完整启动等待（含 boot-error 表面检查）——各 spec 的本地 waitBooted
+ * 副本统一收敛到此处（审查发现 8 处复制且已发散）。
+ */
+export async function waitBooted() {
   await browser.waitUntil(
-    async () => (await browser.getTitle()).toLowerCase().includes("stitch"),
-    { timeout: 30_000, timeoutMsg: "title missing Stitch" },
+    async () => {
+      const title = await browser.getTitle();
+      return title.toLowerCase().includes("stitch");
+    },
+    {
+      timeout: 30_000,
+      timeoutMsg: "window title never contained Stitch (wrong driver/port?)",
+      interval: 500,
+    },
   );
+  await browser.waitUntil(
+    async () => {
+      const settings = await $('[data-testid="settings-view"]');
+      const chat = await $('[data-testid="chat-view"]');
+      const bootError = await $('[data-testid="boot-error"]');
+      return (
+        (await settings.isExisting()) ||
+        (await chat.isExisting()) ||
+        (await bootError.isExisting())
+      );
+    },
+    {
+      timeout: 60_000,
+      timeoutMsg: "neither settings, chat, nor boot-error appeared after launch",
+      interval: 500,
+    },
+  );
+  const bootError = await $('[data-testid="boot-error"]');
+  if (await bootError.isExisting()) {
+    const text = await bootError.getText().catch(() => "");
+    throw new Error(`app reached boot-error surface: ${text}`);
+  }
   await browser.waitUntil(async () => !(await $("#app-loader").isExisting()), {
     timeout: 20_000,
-    timeoutMsg: "loader stuck",
+    timeoutMsg: "#app-loader still present after main view mounted",
   });
+  await $('[data-testid="diag-view"]').waitForExist({ timeout: 10_000 });
+}
+
+export async function bootChat() {
+  await waitBooted();
   await ensureChat();
 }
 
@@ -289,5 +327,20 @@ export async function uiSnapshot() {
       toolCallCount: document.querySelectorAll('[data-testid="tool-status"]').length,
       planCount: document.querySelectorAll('[data-testid="plan-card"]').length,
     };
+  });
+}
+
+/**
+ * 清 WebView2 持久化的 Stitch localStorage 键（S-016——跨 session 持久，
+ * 脏值会让真机测试吃到错误的侧栏 tab/主题/库子页）。spec 的 before 里调用。
+ */
+export async function clearStitchStorage(): Promise<void> {
+  await browser.execute(() => {
+    const keys = [
+      "stitch-sidebar-tab",
+      "stitch-library-kind",
+      "stitch-theme",
+    ];
+    for (const k of keys) localStorage.removeItem(k);
   });
 }

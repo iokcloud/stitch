@@ -54,6 +54,10 @@ export function clearDiagError() {
 
 export function installGlobalDiagHandlers() {
   window.addEventListener("error", (ev) => {
+    const msg = ev.error instanceof Error ? ev.error.message : ev.message;
+    // ResizeObserver loop 是 WebView/Chromium 机制噪声（布局循环时
+    // 浏览器自身提示，非应用错误）——不显示到 diag。
+    if (msg.includes("ResizeObserver loop")) return;
     const detail =
       ev.error instanceof Error
         ? `${ev.error.message}\n${ev.error.stack ?? ""}`

@@ -56,20 +56,12 @@ impl ReadFile {
         let metadata = match tokio::fs::metadata(&full_path).await {
             Ok(m) => m,
             Err(e) => {
-                return Ok(ToolResult {
-                    metrics: None,
-                    success: false,
-                    output: format!("Cannot read {raw_path}: {e}"),
-                });
+                return Ok(ToolResult::fail(format!("Cannot read {raw_path}: {e}")));
             }
         };
 
         if !metadata.is_file() {
-            return Ok(ToolResult {
-                metrics: None,
-                success: false,
-                output: format!("{raw_path} is not a file"),
-            });
+            return Ok(ToolResult::fail(format!("{raw_path} is not a file")));
         }
 
         let size = metadata.len();
@@ -161,10 +153,8 @@ impl WriteFile {
 
         let lines = content.lines().count();
         let bytes = content.len();
-        Ok(ToolResult {
-            metrics: None,
-            success: true,
-            output: format!("Wrote {lines} lines ({bytes} bytes) to {path}"),
-        })
+        Ok(ToolResult::ok(format!(
+            "Wrote {lines} lines ({bytes} bytes) to {path}"
+        )))
     }
 }

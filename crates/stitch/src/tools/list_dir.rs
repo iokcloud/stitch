@@ -58,11 +58,7 @@ impl ListDirectory {
         let mut read_dir = match tokio::fs::read_dir(&target).await {
             Ok(d) => d,
             Err(e) => {
-                return Ok(ToolResult {
-                    metrics: None,
-                    success: false,
-                    output: format!("Cannot list directory: {e}"),
-                });
+                return Ok(ToolResult::fail(format!("Cannot list directory: {e}")));
             }
         };
 
@@ -107,17 +103,9 @@ impl ListDirectory {
         let rel = display_rel_under_work_dir(&self.work_dir, &target);
 
         if entries.is_empty() {
-            Ok(ToolResult {
-                metrics: None,
-                success: true,
-                output: format!("{rel}/ (empty)"),
-            })
+            Ok(ToolResult::ok(format!("{rel}/ (empty)")))
         } else {
-            Ok(ToolResult {
-                metrics: None,
-                success: true,
-                output: format!("{rel}/\n{}", entries.join("\n")),
-            })
+            Ok(ToolResult::ok(format!("{rel}/\n{}", entries.join("\n"))))
         }
     }
 }

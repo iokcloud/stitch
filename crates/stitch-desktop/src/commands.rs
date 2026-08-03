@@ -1,4 +1,6 @@
 //! Tauri IPC commands — bridge between the frontend UI and stitch engine.
+/// Agent 事件通道名（前端 ipc.ts 的 AGENT_EVENT_CHANNEL 须一致）。
+const AGENT_EVENT_CHANNEL: &str = "agent-event";
 
 use crate::platform;
 use serde::{Deserialize, Serialize};
@@ -131,7 +133,7 @@ fn try_acquire_generation(state: &CancelState) -> Result<BusyGuard, String> {
 
 fn emit_cancelled(app: &tauri::AppHandle) {
     let _ = app.emit(
-        "agent-event",
+        AGENT_EVENT_CHANNEL,
         serde_json::json!({
             "type": "cancelled",
             "message": "Generation cancelled by user."
@@ -1900,7 +1902,7 @@ async fn pump_agent_events_opts(
                             }
                         }
                         let payload = serde_json::to_value(&event).unwrap_or_default();
-                        let _ = app.emit("agent-event", payload);
+                        let _ = app.emit(AGENT_EVENT_CHANNEL, payload);
                     }
                     None => {
                         break;
@@ -1924,7 +1926,7 @@ async fn pump_agent_events_opts(
         Ok((Ok(result), session)) => {
             if forward_done && !saw_done {
                 let _ = app.emit(
-                    "agent-event",
+                    AGENT_EVENT_CHANNEL,
                     serde_json::to_value(AgentEvent::Done {
                         response: result.response,
                         iterations: result.iterations,
@@ -1951,7 +1953,7 @@ async fn pump_agent_events_opts(
                 Ok(None)
             } else {
                 let _ = app.emit(
-                    "agent-event",
+                    AGENT_EVENT_CHANNEL,
                     serde_json::json!({
                         "type": "error",
                         "message": msg,
@@ -1963,7 +1965,7 @@ async fn pump_agent_events_opts(
         Err(e) => {
             let msg = format!("Agent task panicked: {e}");
             let _ = app.emit(
-                "agent-event",
+                AGENT_EVENT_CHANNEL,
                 serde_json::json!({
                     "type": "error",
                     "message": msg,
@@ -1986,7 +1988,7 @@ pub async fn send_message(
     message: String,
     images: Option<Vec<String>>,
     history: Option<Vec<HistoryMessage>>,
-    plan_mode: Option<bool>,
+    plan_mode: Option<String>,
     profile_id: Option<String>,
     model: Option<String>,
     chat_session_id: Option<String>,
@@ -2082,7 +2084,7 @@ pub async fn send_message(
         if let Some(reason) = failed_reason {
             tracing::warn!(%reason, "local vision describe degraded");
             let _ = app.emit(
-                "agent-event",
+                AGENT_EVENT_CHANNEL,
                 serde_json::json!({
                     "type": "notice",
                     "message": format!("本地视觉描述失败，已降级发送：{reason}"),
@@ -2092,7 +2094,8 @@ pub async fn send_message(
         None
     };
     let max_iterations = cfg.max_iterations;
-    let plan_mode = plan_mode.unwrap_or(false);
+    // 三态：auto（模型自主判断）· on（强制规划）· off（直接执行）
+    let plan_mode = plan_mode.unwrap_or_else(|| "auto".into());
     let resume = resume.unwrap_or(false);
     let chat_id = chat_session_id
         .as_deref()
@@ -2161,7 +2164,14 @@ pub async fn send_message(
     let cancel_flag = state.flag.clone();
     let cancel_notify = state.notify.clone();
 
-    if plan_mode {
+    let should_plan = match plan_mode.as_str() {
+        "on" => true,
+        "off" => false,
+        _ => agent::plan::needs_plan(&session, &api_base, &model, &api_key)
+            .await
+            .unwrap_or(false),
+    };
+    if should_plan {
         let plan_session = session.clone();
         let plan = agent::plan::generate_plan(&plan_session, &api_base, &model, &api_key)
             .await
@@ -2191,7 +2201,7 @@ pub async fn send_message(
 
         let plan_id = new_plan_id();
         let _ = app.emit(
-            "agent-event",
+            AGENT_EVENT_CHANNEL,
             serde_json::to_value(AgentEvent::PlanProposed {
                 id: plan_id.clone(),
                 plan: plan.clone(),
@@ -2206,11 +2216,11 @@ pub async fn send_message(
         }
         if !approved {
             let _ = app.emit(
-                "agent-event",
+                AGENT_EVENT_CHANNEL,
                 serde_json::to_value(AgentEvent::PlanRejected).unwrap_or_default(),
             );
             let _ = app.emit(
-                "agent-event",
+                AGENT_EVENT_CHANNEL,
                 serde_json::json!({
                     "type": "done",
                     "response": "计划已拒绝，未执行。",
@@ -2221,7 +2231,7 @@ pub async fn send_message(
         }
 
         let _ = app.emit(
-            "agent-event",
+            AGENT_EVENT_CHANNEL,
             serde_json::to_value(AgentEvent::PlanApproved).unwrap_or_default(),
         );
 
@@ -2240,7 +2250,7 @@ pub async fn send_message(
             }
 
             let _ = app.emit(
-                "agent-event",
+                AGENT_EVENT_CHANNEL,
                 serde_json::to_value(AgentEvent::PlanStepStart {
                     index: i,
                     description: step.description.clone(),
@@ -2303,7 +2313,7 @@ pub async fn send_message(
             session = s;
 
             let _ = app.emit(
-                "agent-event",
+                AGENT_EVENT_CHANNEL,
                 serde_json::to_value(AgentEvent::PlanStepDone {
                     index: i,
                     description: step.description.clone(),
@@ -2788,7 +2798,7 @@ pub async fn run_suite(
         }
 
         let _ = app.emit(
-            "agent-event",
+            AGENT_EVENT_CHANNEL,
             serde_json::to_value(AgentEvent::PlanStepStart {
                 index: idx,
                 description: step.step_title.clone(),
@@ -2852,14 +2862,14 @@ pub async fn run_suite(
                         }
                         Some(event) => {
                             let payload = serde_json::to_value(&event).unwrap_or_default();
-                            let _ = app.emit("agent-event", payload);
+                            let _ = app.emit(AGENT_EVENT_CHANNEL, payload);
                         }
                         None => break,
                     }
                 }
                 _ = cancel_notify.notified() => {
                     let _ = app.emit(
-                        "agent-event",
+                        AGENT_EVENT_CHANNEL,
                         serde_json::json!({
                             "type": "cancelled",
                             "message": "Generation cancelled by user."
@@ -2889,7 +2899,7 @@ pub async fn run_suite(
                     ));
                 }
                 let _ = app.emit(
-                    "agent-event",
+                    AGENT_EVENT_CHANNEL,
                     serde_json::to_value(AgentEvent::PlanStepDone {
                         index: idx,
                         description: step.step_title.clone(),
@@ -2914,7 +2924,7 @@ pub async fn run_suite(
                     &titles,
                 );
                 let _ = app.emit(
-                    "agent-event",
+                    AGENT_EVENT_CHANNEL,
                     serde_json::json!({
                         "type": "error",
                         "message": summary,
@@ -2956,7 +2966,7 @@ pub async fn run_suite(
                     &titles,
                 );
                 let _ = app.emit(
-                    "agent-event",
+                    AGENT_EVENT_CHANNEL,
                     serde_json::json!({
                         "type": "error",
                         "message": summary,
@@ -2987,7 +2997,7 @@ pub async fn run_suite(
 
     if !cancel_flag.load(Ordering::SeqCst) {
         let _ = app.emit(
-            "agent-event",
+            AGENT_EVENT_CHANNEL,
             serde_json::json!({
                 "type": "done",
                 "response": if combined.is_empty() {
