@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { config, fillComposer, isStreaming } from "../stores/app";
+  import { config, fillComposer } from "../stores/app";
+import { stream } from "../stores/stream.svelte";
   import { nav } from "../nav.svelte";
   import { patchItem, removeItem, clearSedimentCandidate } from "../stores/sessions";
   import { matureSceneByTitle, normalizeSedimentPlaybook } from "../mature-scenes";
@@ -89,7 +90,7 @@
   }
 
   function rerun() {
-    if (!mature || $isStreaming) return;
+    if (!mature || stream.isStreaming) return;
     fillComposer(mature.prompt);
   }
 
@@ -161,7 +162,7 @@
         type="button"
         class="sediment-action is-muted"
         data-testid="sediment-rerun"
-        disabled={$isStreaming}
+        disabled={stream.isStreaming}
         onclick={rerun}
       >
         再跑

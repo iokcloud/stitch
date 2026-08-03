@@ -1,5 +1,6 @@
 import { get, writable } from "svelte/store";
-import { isStreaming } from "./app";
+import { onStreamEnd } from "./stream.svelte";
+import { stream } from "./stream.svelte";
 
 export const paletteOpen = writable(false);
 export const shortcutsOpen = writable(false);
@@ -28,8 +29,8 @@ export function refocusComposerSoon(): void {
 // (stream in progress), remember to refocus after the stream ends.
 let pendingRefocus = false;
 
-isStreaming.subscribe((streaming) => {
-    if (!streaming && pendingRefocus) {
+onStreamEnd(() => {
+    if (pendingRefocus) {
         pendingRefocus = false;
         refocusComposerSoon();
     }
@@ -44,7 +45,7 @@ if (typeof window !== "undefined") {
         let prev = false;
         store.subscribe((open) => {
             if (prev && !open) {
-                if (get(isStreaming)) {
+                if (stream.isStreaming) {
                     pendingRefocus = true;
                 } else {
                     refocusComposerSoon();

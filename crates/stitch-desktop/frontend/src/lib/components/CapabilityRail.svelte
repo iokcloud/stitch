@@ -3,10 +3,10 @@
   import {
     config,
     fillComposer,
-    isStreaming,
     workDir,
     sidebarTab,
   } from "../stores/app";
+import { stream } from "../stores/stream.svelte";
   import { nav } from "../nav.svelte";
   import { refocusComposerSoon } from "../stores/palette";
   import { pushToast } from "../stores/toasts";
@@ -74,7 +74,7 @@
   }
 
   async function toggleMenu() {
-    if ($isStreaming) return;
+    if (stream.isStreaming) return;
     open = !open;
     if (open) {
       panel = "root";
@@ -121,7 +121,7 @@
   }
 
   function useSkill(sk: LocalSkillRow) {
-    if ($isStreaming) return;
+    if (stream.isStreaming) return;
     const hint = sk.description.trim()
       ? `（${sk.description.trim().slice(0, 80)}）`
       : "";
@@ -175,7 +175,7 @@
     aria-label="添加 Skill 或 MCP"
     aria-expanded={open}
     aria-haspopup="menu"
-    disabled={$isStreaming}
+    disabled={stream.isStreaming}
     onclick={() => void toggleMenu()}
   >
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
