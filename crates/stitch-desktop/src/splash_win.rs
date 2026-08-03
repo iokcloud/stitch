@@ -297,8 +297,8 @@ fn draw_overlay(hwnd: isize) {
         let t = i as f64 / (ARC_DOTS - 1) as f64;
         let factor = 1.0 - 0.65 * t;
 
-        let r = 0u8;
-        let g = ch(123, factor);
+        let r = ch(77, factor); // #4d9fff——深色 accent 提亮版（与主题统一）
+        let g = ch(159, factor);
         let b = ch(255, factor);
         let dot_brush = unsafe { CreateSolidBrush(bgr(r, g, b)) };
         let prev = unsafe { SelectObject(hdc, dot_brush) };

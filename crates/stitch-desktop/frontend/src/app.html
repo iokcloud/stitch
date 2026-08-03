@@ -14,7 +14,7 @@
       }
       [data-theme="dark"] html,
       [data-theme="dark"] body {
-        background: #0f172a;
+        background: #000000;
       }
       /* Opaque full-window shell — required for WebView2 hit-testing when
          the Tauri window is transparent (splash cross-fade). */
@@ -34,8 +34,8 @@
         display: none !important;
       }
       [data-theme="dark"] #app-root {
-        background: #0f172a;
-        color: #f1f5f9;
+        background: #000000;
+        color: #e6e6eb;
       }
       #app-loader {
         position: fixed;
@@ -76,16 +76,19 @@
         animation-delay: 0.2s;
       }
       [data-theme="dark"] #app-loader {
-        background: #0f172a;
+        background: #000000;
       }
       [data-theme="dark"] .splash-title {
-        color: #e2e8f0;
+        color: #e6e6eb;
       }
       [data-theme="dark"] .splash-subtitle {
-        color: rgba(226, 232, 240, 0.7);
+        color: rgba(230, 230, 235, 0.7);
       }
       [data-theme="dark"] .splash-progress {
-        background: rgba(226, 232, 240, 0.15);
+        background: rgba(255, 255, 255, 0.15);
+      }
+      [data-theme="dark"] .splash-progress-fill {
+        background: #4d9fff;
       }
       .splash-stage {
         display: flex;

@@ -38,8 +38,8 @@ pub fn set_theme(app: &AppHandle, dark: bool) {
         }
     }
 
-    // DWMWA_CAPTION_COLOR (35)
-    let color: u32 = if dark { 0x002a170f } else { 0x00ffffff };
+    // DWMWA_CAPTION_COLOR (35) — 深色标题栏底色与主题统一（纯黑基底）
+    let color: u32 = if dark { 0x00000000 } else { 0x00ffffff };
     unsafe {
         DwmSetWindowAttribute(
             hwnd_raw,
@@ -50,7 +50,7 @@ pub fn set_theme(app: &AppHandle, dark: bool) {
     }
 
     if dark {
-        let _ = window.set_background_color(Some(tauri::webview::Color(0x0f, 0x17, 0x2a, 0xff)));
+        let _ = window.set_background_color(Some(tauri::webview::Color(0x00, 0x00, 0x00, 0xff)));
     } else {
         let _ = window.set_background_color(Some(tauri::webview::Color(0xff, 0xff, 0xff, 0xff)));
     }

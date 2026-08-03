@@ -47,33 +47,56 @@
 }
 
 [data-theme="dark"] {
-    --color-background: #0f172a;
-    --color-surface: #111827;
-    --color-chat-pane: #0f172a;
-    --color-foreground: #f1f5f9;
-    --color-foreground-secondary: #cbd5e1;
-    --color-muted: #94a3b8;
-    --color-border: #1e293b;
-    --color-border-strong: #334155;
-    --color-user-bubble: #1e293b;
-    --color-user-text: #f1f5f9;
+    /* Raycast 式纯黑基底（用户拍板）：
+       黑底上阴影失效，层次全靠「从黑里往外亮」的 surface/elevated
+       两档 + alpha 白边框；文字非纯白缓解长阅读刺眼 */
+    --color-background: #000000;
+    --color-surface: #131318;
+    --color-surface-elevated: #1a1a21;
+    --color-chat-pane: #000000;
+    --color-foreground: #e6e6eb;
+    --color-foreground-secondary: #a9a9b3;
+    --color-muted: #83838f;
+    --color-border: rgba(255, 255, 255, 0.08);
+    --color-border-strong: rgba(255, 255, 255, 0.16);
+    --color-user-bubble: #1b1b22;
+    --color-user-text: #e6e6eb;
     --color-assistant-bubble: transparent;
-    --color-error: #f87171;
-    --color-success: #4ade80;
-    --color-rail: #111827;
-    --color-chip: #1e293b;
-    --color-chip-border: #334155;
-    --color-shell-bg: #020617;
-    --color-shell-fg: #e2e8f0;
-    --color-shell-muted: #94a3b8;
-    --color-shell-prompt: #38bdf8;
+    --color-error: #f0606a;
+    --color-success: #3ecf8e;
+    --color-rail: #0a0a0c;
+    --color-chip: #15151b;
+    --color-chip-border: rgba(255, 255, 255, 0.1);
+    --color-shadow: #000000;
+    --color-shell-bg: #000000;
+    --color-shell-fg: #dce0e6;
+    --color-shell-muted: #83838f;
+    --color-shell-prompt: #4da3ff;
     --color-on-accent: #ffffff;
-    --color-danger: #e5484d;
+    --color-danger: #f2606a;
+    /* accent 深色变体：提亮降饱和（#007bff 在深底上发暗发闷） */
+    --color-brand-accent: #4d9fff;
     --radius-sm: 4px;
     --radius: 6px;
     --radius-md: 8px;
     --radius-lg: 10px;
     --sidebar-w: 256px;
+}
+
+/* 深色层次：弹层/悬浮控件抬至 elevated 层（比 surface 再亮一档），
+   靠层次+细边框立界，不靠阴影（黑底上黑阴影不可见） */
+[data-theme="dark"] .modal-panel,
+[data-theme="dark"] .palette-panel,
+[data-theme="dark"] .model-menu,
+[data-theme="dark"] .workdir-menu,
+[data-theme="dark"] .workdir-panel,
+[data-theme="dark"] .toast,
+[data-theme="dark"] .scroll-bottom-pill {
+    background: var(--color-surface-elevated);
+}
+[data-theme="dark"] .palette-panel,
+[data-theme="dark"] .workdir-panel {
+    box-shadow: 0 20px 56px rgba(0, 0, 0, 0.55);
 }
 
 html,
@@ -2986,10 +3009,8 @@ body {
     background: transparent;
     cursor: pointer;
     color: var(--color-muted);
-    opacity: 0.72;
 }
 .session-row:hover {
-    opacity: 0.92;
     color: var(--color-foreground-secondary);
     background: color-mix(in srgb, var(--color-foreground) 3%, transparent);
 }
