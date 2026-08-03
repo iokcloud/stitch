@@ -88,7 +88,7 @@ impl CdpClient {
     /// 共享 HTTP client（CDP 发现/连接复用）。
     fn shared_http_client() -> &'static reqwest::Client {
         static CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
-        CLIENT.get_or_init(|| reqwest::Client::new())
+        CLIENT.get_or_init(reqwest::Client::new)
     }
 
     pub async fn connect(debug_port: u16, prefer_url: Option<&str>) -> anyhow::Result<Self> {
