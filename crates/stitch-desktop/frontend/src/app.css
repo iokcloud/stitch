@@ -14,24 +14,25 @@
 }
 
 :root {
-    /* Light: IDE-like cool slate (sidebar gray / chat white — no warm beige) */
-    --color-background: #f4f6f8;
+    /* Light: 中性暖白（与深色纯黑对称的现代语言——去 slate 蓝灰的框架默认感）：
+       暖白底 + alpha 黑细边框 + 中性文字 */
+    --color-background: #f7f7f8;
     --color-surface: #ffffff;
     --color-chat-pane: #ffffff;
-    --color-foreground: #0f172a;
-    --color-foreground-secondary: #1e293b;
-    --color-muted: #5c6b84;
-    --color-border: #d8dee8;
-    --color-border-strong: #b8c0cc;
-    --color-user-bubble: #edf3fb;
-    --color-user-text: #0f172a;
+    --color-foreground: #1a1a1e;
+    --color-foreground-secondary: #3e3e44;
+    --color-muted: #5f646e;
+    --color-border: rgba(15, 18, 22, 0.09);
+    --color-border-strong: rgba(15, 18, 22, 0.16);
+    --color-user-bubble: #eceef0;
+    --color-user-text: #1a1a1e;
     --color-assistant-bubble: #ffffff;
-    --color-error: #b91c1c;
-    --color-success: #166534;
-    --color-rail: #eef2f6;
+    --color-error: #b3261e;
+    --color-success: #1a7f37;
+    --color-rail: #f0f0f2;
     --color-chip: #ffffff;
-    --color-chip-border: #d8dee8;
-    --color-shadow: #0f172a;
+    --color-chip-border: rgba(15, 18, 22, 0.09);
+    --color-shadow: #000000;
     /* Terminal / shell dark surface (kept dark in both themes) */
     --color-shell-bg: #0f172a;
     --color-shell-fg: #e2e8f0;
@@ -39,6 +40,8 @@
     --color-shell-prompt: #38bdf8;
     --color-on-accent: #ffffff;
     --color-danger: #e5484d;
+    /* 按钮专属 accent 底：白字对比 ≥4.5（链接/焦点仍用亮 accent） */
+    --color-brand-accent-strong: #0069d9;
     --radius-sm: 4px;
     --radius: 6px;
     --radius-md: 8px;
@@ -76,6 +79,8 @@
     --color-danger: #f2606a;
     /* accent 深色变体：提亮降饱和（#007bff 在深底上发暗发闷） */
     --color-brand-accent: #4d9fff;
+    /* 深色按钮底：白字对比 4.8:1（亮 accent 只做链接/焦点/描边） */
+    --color-brand-accent-strong: #2b6edb;
     --radius-sm: 4px;
     --radius: 6px;
     --radius-md: 8px;
@@ -2167,8 +2172,8 @@ body {
     justify-content: center;
     padding: 0.55rem 1.1rem;
     border-radius: var(--radius);
-    border: 1px solid var(--color-brand-accent);
-    background: var(--color-brand-accent);
+    border: 1px solid var(--color-brand-accent-strong);
+    background: var(--color-brand-accent-strong);
     color: var(--color-on-accent);
     font-size: 13px;
     font-weight: 600;
@@ -4422,6 +4427,14 @@ kbd {
 [data-theme="dark"] .hljs {
   color: var(--color-shell-fg);
   background: transparent;
+}
+/* 纯黑下代码块抬层：rail(#0a0a0c) 与正文黑底几乎无区分——代码卡
+   抬至 surface 层 + 头部 elevated，与正文立界（GitHub Dark 高亮色不变） */
+[data-theme="dark"] .md-content .md-code-block {
+  background: var(--color-surface);
+}
+[data-theme="dark"] .md-content .md-code-head {
+  background: var(--color-surface-elevated);
 }
 [data-theme="dark"] .hljs-comment,
 [data-theme="dark"] .hljs-quote {
