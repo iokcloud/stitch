@@ -12,6 +12,8 @@ import { diag } from "./diag";
 
 class Nav {
   view = $state<AppView>("settings");
+  /** 首次启动向导（无模型配置时全屏引导；完成后不再出现）。 */
+  firstRunWizard = $state(false);
   settingsFirstRun = $state(true);
   settingsFromChat = $state(false);
   /** Which settings left-nav tab to open; default model when unset. */
@@ -39,8 +41,20 @@ class Nav {
     this.shellReady = true;
   }
 
+  showFirstRun() {
+    this.shellReady = true;
+    this.firstRunWizard = true;
+    this.syncDom("settings");
+    diag("navigate → first-run wizard");
+  }
+
+  dismissFirstRun() {
+    this.firstRunWizard = false;
+  }
+
   showChat(reason = "showChat") {
     this.shellReady = true;
+    this.firstRunWizard = false;
     this.view = "chat";
     this.settingsFirstRun = false;
     this.settingsFromChat = false;

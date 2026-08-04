@@ -25,6 +25,46 @@ pub enum StreamEvent {
     Error(String),
 }
 
+/// API 错误 → 用户可理解的中文说明（替代原始 status+body）。
+/// 分类依据：4xx 客户端错误（密钥/模型/限流）与 5xx/网络（可重试）。
+pub fn classify_api_error(status: u16, body: &str) -> String {
+    let body_hint = body.trim().chars().take(60).collect::<String>();
+    match status {
+        401 | 403 => format!(
+            "模型密钥无效或已过期（{status}）。请在设置 → 模型中检查密钥是否正确。{body_hint}"
+        ),
+        404 => format!(
+            "模型不存在或服务不支持该模型名（{status}）。请在设置 → 模型中更新模型名称。{body_hint}"
+        ),
+        429 => format!(
+            "模型服务限流（{status}，请求过多），已自动重试仍失败。请稍等片刻再试。{body_hint}"
+        ),
+        400 => format!("模型服务拒绝了请求（{status}）。{body_hint}"),
+        500..=599 => {
+            format!("模型服务暂时不可用（{status}），已自动重试仍失败。请稍后再试。{body_hint}")
+        }
+        _ => format!("模型服务返回异常（{status}）。{body_hint}"),
+    }
+}
+
+/// 网络层错误 → 用户可理解的中文说明。
+pub fn classify_network_error(e: &reqwest::Error) -> String {
+    if e.is_timeout() {
+        "连接模型服务超时，请检查网络或服务地址。".to_string()
+    } else if e.is_connect() {
+        "无法连接模型服务，请检查网络或服务地址。".to_string()
+    } else if e.is_request() {
+        format!("发送请求失败：{e}")
+    } else {
+        format!("请求异常：{e}")
+    }
+}
+
+/// 是否应重试（429 限流 + 5xx + 网络类；4xx 其余不重试）。
+fn is_retryable_status(status: u16) -> bool {
+    status == 429 || (500..=599).contains(&status)
+}
+
 /// Provider name.
 /// Configuration for an LLM request.
 #[derive(Debug, Clone)]
@@ -149,15 +189,13 @@ pub async fn stream_chat(
 
     tracing::debug!(%url, model = %request.model, msg_count = request.messages.len(), "sending chat request");
 
-    // Retry transient network errors up to 2 times
+    // 重试策略：429 限流 + 5xx + 网络类错误最多重试 2 次；
+    // 429 尊重 Retry-After 头，其余按 1s/2s 退避。4xx 其余（密钥/模型等）
+    // 不重试——立即以用户可理解的中文报错。
     let max_retries: u32 = 2;
     let mut last_error = None;
     let client = shared_http_client();
     for attempt in 0..=max_retries {
-        if attempt > 0 {
-            tracing::warn!(attempt, "retrying after transient error");
-            tokio::time::sleep(std::time::Duration::from_millis(500 * attempt as u64)).await;
-        }
         match client
             .post(&url)
             .header("Authorization", format!("Bearer {}", request.api_key))
@@ -169,30 +207,56 @@ pub async fn stream_chat(
             Ok(response) => {
                 let status = response.status();
                 if !status.is_success() {
+                    // 429 尊重 Retry-After 头（秒），其余按 1s/2s 退避
+                    let retry_after = response
+                        .headers()
+                        .get(reqwest::header::RETRY_AFTER)
+                        .and_then(|v| v.to_str().ok())
+                        .and_then(|s| s.trim().parse::<u64>().ok());
                     let body = response.text().await.unwrap_or_default();
-                    // Don't retry on 4xx errors (client errors)
-                    if status.is_client_error() {
-                        let _ = tx.send(StreamEvent::Error(format!("API error {status}: {body}")));
-                        anyhow::bail!("API error {status}: {body}");
+                    if is_retryable_status(status.as_u16()) {
+                        last_error = Some(anyhow::anyhow!(
+                            "{}",
+                            classify_api_error(status.as_u16(), &body)
+                        ));
+                        if attempt < max_retries {
+                            let wait = retry_after
+                                .map(std::time::Duration::from_secs)
+                                .unwrap_or_else(|| {
+                                    std::time::Duration::from_millis(1000 * (attempt as u64 + 1))
+                                });
+                            tracing::warn!(attempt, wait_ms = wait.as_millis(), "retrying");
+                            tokio::time::sleep(wait).await;
+                        }
+                        continue;
                     }
-                    last_error = Some(anyhow::anyhow!("API error {status}: {body}"));
-                    continue;
+                    let friendly = classify_api_error(status.as_u16(), &body);
+                    let _ = tx.send(StreamEvent::Error(friendly.clone()));
+                    anyhow::bail!("{friendly}");
                 }
                 // Success — proceed to stream processing
                 return process_sse_stream(response, tx).await;
             }
             Err(e) => {
                 if e.is_timeout() || e.is_connect() || e.is_request() {
-                    last_error = Some(anyhow::anyhow!("Network error: {e}"));
+                    last_error = Some(anyhow::anyhow!("{}", classify_network_error(&e)));
+                    if attempt < max_retries {
+                        tracing::warn!(attempt, "retrying after network error");
+                        tokio::time::sleep(std::time::Duration::from_millis(
+                            1000 * (attempt as u64 + 1),
+                        ))
+                        .await;
+                    }
                     continue;
                 }
-                let _ = tx.send(StreamEvent::Error(format!("Request failed: {e}")));
-                anyhow::bail!("Request failed: {e}");
+                let friendly = format!("请求异常：{e}");
+                let _ = tx.send(StreamEvent::Error(friendly.clone()));
+                anyhow::bail!("{friendly}");
             }
         }
     }
 
-    let err = last_error.unwrap_or_else(|| anyhow::anyhow!("Unknown error"));
+    let err = last_error.unwrap_or_else(|| anyhow::anyhow!("未知错误"));
     let _ = tx.send(StreamEvent::Error(err.to_string()));
     anyhow::bail!("{err:#}");
 }
@@ -216,19 +280,55 @@ pub async fn complete_chat(request: LlmRequest) -> anyhow::Result<String> {
     };
 
     let client = shared_http_client();
-    let response = client
-        .post(&url)
-        .header("Authorization", format!("Bearer {}", request.api_key))
-        .header("Content-Type", "application/json")
-        .timeout(std::time::Duration::from_secs(45))
-        .json(&chat_req)
-        .send()
-        .await?;
-
+    // 与 stream_chat 同策略：429/5xx/网络重试 2 次，其余立即友好报错。
+    let max_retries: u32 = 2;
+    let mut last_error = None;
+    let mut response = None;
+    for attempt in 0..=max_retries {
+        if attempt > 0 {
+            tracing::warn!(attempt, "complete_chat retrying after transient error");
+            tokio::time::sleep(std::time::Duration::from_millis(1000 * attempt as u64)).await;
+        }
+        match client
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", request.api_key))
+            .header("Content-Type", "application/json")
+            .timeout(std::time::Duration::from_secs(45))
+            .json(&chat_req)
+            .send()
+            .await
+        {
+            Ok(resp) => {
+                let status = resp.status();
+                if !status.is_success() {
+                    let body = resp.text().await.unwrap_or_default();
+                    if is_retryable_status(status.as_u16()) {
+                        last_error = Some(anyhow::anyhow!(
+                            "{}",
+                            classify_api_error(status.as_u16(), &body)
+                        ));
+                        continue;
+                    }
+                    anyhow::bail!("{}", classify_api_error(status.as_u16(), &body));
+                }
+                response = Some(resp);
+                break;
+            }
+            Err(e) => {
+                if e.is_timeout() || e.is_connect() || e.is_request() {
+                    last_error = Some(anyhow::anyhow!("{}", classify_network_error(&e)));
+                    continue;
+                }
+                anyhow::bail!("请求异常：{e}");
+            }
+        }
+    }
+    let response =
+        response.ok_or_else(|| last_error.unwrap_or_else(|| anyhow::anyhow!("未知错误")))?;
     let status = response.status();
     let body = response.text().await.unwrap_or_default();
     if !status.is_success() {
-        anyhow::bail!("API error {status}: {body}");
+        anyhow::bail!("{}", classify_api_error(status.as_u16(), &body));
     }
 
     let parsed: serde_json::Value = serde_json::from_str(&body)
@@ -369,4 +469,34 @@ async fn process_sse_stream(
     }
     let _ = tx.send(StreamEvent::Done);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{classify_api_error, is_retryable_status};
+
+    #[test]
+    fn auth_error_friendly_and_not_retryable() {
+        assert!(classify_api_error(401, "invalid key").contains("密钥无效"));
+        assert!(!is_retryable_status(401));
+        assert!(!is_retryable_status(404));
+    }
+
+    #[test]
+    fn rate_limit_is_retryable() {
+        assert!(is_retryable_status(429));
+        assert!(classify_api_error(429, "").contains("限流"));
+    }
+
+    #[test]
+    fn server_error_retryable_and_friendly() {
+        assert!(is_retryable_status(500));
+        assert!(is_retryable_status(503));
+        assert!(classify_api_error(503, "").contains("暂时不可用"));
+    }
+
+    #[test]
+    fn model_not_found_hints_config() {
+        assert!(classify_api_error(404, "").contains("更新模型"));
+    }
 }

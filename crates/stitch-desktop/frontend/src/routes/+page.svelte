@@ -5,6 +5,7 @@
   import SettingsView from "$lib/components/SettingsView.svelte";
   import ChatView from "$lib/components/ChatView.svelte";
   import WorkDirDialog from "$lib/components/WorkDirDialog.svelte";
+  import FirstRunWizard from "$lib/components/FirstRunWizard.svelte";
   import CheckpointDialog from "$lib/components/CheckpointDialog.svelte";
   import DiagBanner from "$lib/components/DiagBanner.svelte";
   import ToastStack from "$lib/components/ToastStack.svelte";
@@ -309,7 +310,7 @@ import { terminalOpen, toggleTerminal } from "$lib/terminal/store";
         ensureSessionLlm();
         nav.showChat("bootstrap");
       } else {
-        nav.showSettings({ firstRun: true });
+        nav.showFirstRun();
       }
 
       // Reveal UI before event wiring — never leave the splash overlay
@@ -349,9 +350,10 @@ import { terminalOpen, toggleTerminal } from "$lib/terminal/store";
               // Auto-enter compact mode when desktop tools run; track the
               // current tool for the label. A lingering「已完成」hold from a
               // previous turn yields to the new turn immediately.
-              // 自动变形已取消（用户反馈变形形态不佳）——桌面工具执行时
-              // 保持全窗，仅记录当前工具供手动浮条显示。
-              if (DESKTOP_TOOLS.has(ev.name)) {
+              // 硬保证：任何工具调用都不自动进入紧凑模式（用户明确要求，
+              // 8/2 曾取消自动变形，此处再加守卫）——只有用户已手动处于
+              // 紧凑模式时才跟踪当前工具供浮条标签显示。
+              if (compact.mode && DESKTOP_TOOLS.has(ev.name)) {
                 compact.beginRun();
                 compact.tool = ev.name;
               }
@@ -792,6 +794,9 @@ import { terminalOpen, toggleTerminal } from "$lib/terminal/store";
 </div>
 
 <WorkDirDialog />
+  {#if nav.firstRunWizard}
+    <FirstRunWizard />
+  {/if}
 <CheckpointDialog />
 <CommandPalette />
 <ShortcutsDialog />
