@@ -261,36 +261,62 @@
         {#if onRegenerate && !error}
           <button
             type="button"
-            class="msg-action text-label"
+            class="msg-action"
             data-testid="msg-regenerate"
             aria-label="重新生成"
             title="重新生成"
-            onclick={onRegenerate}>重新生成</button>
+            onclick={onRegenerate}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true">
+              <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+              <path d="M3 3v5h5" />
+            </svg>
+          </button>
         {/if}
         {#if onSediment && !error}
           <button
             type="button"
-            class="msg-action text-label"
+            class="msg-action"
             data-testid="msg-sediment"
             data-sediment-ready={sedimentReady ? "true" : "false"}
             aria-label="保存"
             title="存成提示词"
             onclick={onSediment}
-          >保存</button>
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true">
+              <path d="M19 21l-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z" />
+            </svg>
+          </button>
         {/if}
         {#if onContinue && !error}
           <button
             type="button"
-            class="msg-action text-label"
+            class="msg-action"
             data-testid="msg-continue"
             aria-label="继续执行"
             title="继续执行"
-            onclick={onContinue}>继续执行</button>
+            onclick={onContinue}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true">
+              <path d="M6 4l14 8-14 8z" />
+            </svg>
+          </button>
         {/if}
         {#if error && onRetry}
-          <button type="button" class="msg-action text-label" aria-label="重试" onclick={onRetry}
-            >重试</button
+          <button
+            type="button"
+            class="msg-action"
+            aria-label="重试"
+            title="重试"
+            onclick={onRetry}
           >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true">
+              <path d="M17 1l4 4-4 4" />
+              <path d="M3 11V9a4 4 0 0 1 4-4h14" />
+              <path d="M7 23l-4-4 4-4" />
+              <path d="M21 13v2a4 4 0 0 1-4 4H3" />
+            </svg>
+          </button>
         {/if}
       </div>
     {/if}
@@ -299,11 +325,16 @@
       <div class="msg-actions msg-actions-user">
         <button
           type="button"
-          class="msg-action text-label"
+          class="msg-action"
           data-testid="msg-edit"
           aria-label="编辑"
           title="编辑并重发"
-          onclick={onEdit}>编辑</button>
+          onclick={onEdit}
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true">
+            <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
+          </svg>
+        </button>
       </div>
     {/if}
   </div>

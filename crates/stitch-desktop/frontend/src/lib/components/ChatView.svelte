@@ -410,26 +410,18 @@ const PLAN_MODE_LABELS: Record<string, string> = {
     recordPrunedSession = sid;
     expandedBlocks = {};
     measuredHeights = {};
+    observedBlockKeys.clear();
+    blockRO?.disconnect();
+    blockRO = null;
   });
 
-  $effect(() => {
-    // Measure rendered block heights after each paint; feed the estimates.
-    // 依赖 expandedBlocks：展开/收起后立刻重测真实高度——否则窗口切片与
-    // spacer 一直按折叠态估算走，滚动跨过展开块时会整段跳变。
-    expandedBlocks;
-    fontsReadyTick;
-    if (!messagesEl || !virtualizationActive) return;
-    // WebFont 未就绪时测量的高度失真（~23px vs 真实 80px）且不再重测——
-    // 就绪前不写入缓存，就绪后 fontsReadyTick 触发一轮全窗口重测（只一次）。
-    if (!fontsRemeasured) {
-      fontsRemeasured = true;
-      document.fonts?.ready
-        .then(() => {
-          fontsReadyTick++;
-        })
-        .catch(() => {});
-    }
-    const fontsLoaded = document.fonts?.status === "loaded";
+  /** 可见块尺寸异步变化（图片/代码块/流式输出加载）→ ResizeObserver 补测。
+   * 曾长期按「渲染时测一次」——窗口滚动后新进入视口的块不重测，图片
+   * 异步加载使 spacer 低估 → 向下滚动重叠闪烁（用户实测）。 */
+  let blockRO: ResizeObserver | null = null;
+  let observedBlockKeys = new Set<string>();
+  function remeasureVisibleBlocks(fontsLoaded: boolean) {
+    if (!messagesEl) return;
     const nodes = messagesEl.querySelectorAll<HTMLElement>("[data-block-key]");
     if (!nodes.length) return;
     const next: Record<string, number> = {};
@@ -447,6 +439,59 @@ const PLAN_MODE_LABELS: Record<string, string> = {
     if (changed) {
       measuredHeights = { ...measuredHeights, ...next };
     }
+  }
+  function ensureBlockObservation() {
+    if (!messagesEl || !virtualizationActive) return;
+    if (!blockRO) {
+      blockRO = new ResizeObserver((entries) => {
+        const next: Record<string, number> = {};
+        let changed = false;
+        for (const e of entries) {
+          const key = (e.target as HTMLElement).getAttribute("data-block-key");
+          if (!key) continue;
+          const h = (e.target as HTMLElement).getBoundingClientRect().height;
+          if (h > 0 && Math.abs((measuredHeights[key] ?? 0) - h) > 2) {
+            next[key] = h;
+            changed = true;
+          }
+        }
+        if (changed) measuredHeights = { ...measuredHeights, ...next };
+      });
+    }
+    const nodes = messagesEl.querySelectorAll<HTMLElement>("[data-block-key]");
+    for (const el of nodes) {
+      const key = el.getAttribute("data-block-key");
+      if (key && !observedBlockKeys.has(key)) {
+        observedBlockKeys.add(key);
+        blockRO.observe(el);
+      }
+    }
+  }
+
+  $effect(() => {
+    // Measure rendered block heights after each paint; feed the estimates.
+    // 依赖 expandedBlocks：展开/收起后立刻重测真实高度——否则窗口切片与
+    // spacer 一直按折叠态估算走，滚动跨过展开块时会整段跳变。
+    // 依赖 virtualWindow.start/end + renderTick：滚动使窗口移动后新进入
+    // 视口的块立即重测（修复向下滚动重叠闪烁）。
+    expandedBlocks;
+    fontsReadyTick;
+    virtualWindow.start;
+    virtualWindow.end;
+    if (!messagesEl || !virtualizationActive) return;
+    // WebFont 未就绪时测量的高度失真（~23px vs 真实 80px）且不再重测——
+    // 就绪前不写入缓存，就绪后 fontsReadyTick 触发一轮全窗口重测（只一次）。
+    if (!fontsRemeasured) {
+      fontsRemeasured = true;
+      document.fonts?.ready
+        .then(() => {
+          fontsReadyTick++;
+        })
+        .catch(() => {});
+    }
+    const fontsLoaded = document.fonts?.status === "loaded";
+    remeasureVisibleBlocks(fontsLoaded);
+    ensureBlockObservation();
   });
 
   function syncScrollMetrics() {

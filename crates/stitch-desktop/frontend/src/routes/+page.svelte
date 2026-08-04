@@ -336,11 +336,9 @@ import { terminalOpen, toggleTerminal } from "$lib/terminal/store";
               if (get(skillRecording)) {
                 skillRecordSteps.update((n) => n + 1);
               }
-              // run_command 执行时自动打开终端面板（顶栏入口已移除——
-              // 终端收编为命令执行视图）。
-              if (ev.name === "run_command" && !get(terminalOpen)) {
-                toggleTerminal();
-              }
+              // 不再自动打开终端面板（用户反馈命令执行时输入区上方弹出
+              // 终端区很怪；主流做法是输出留在消息流工具卡内）。终端仍可
+              // 经命令面板手动打开。
               const tool = newTool(ev.name, {
                 recorded: get(skillRecording),
               });
