@@ -1825,6 +1825,28 @@ fn foreground_window_title() -> String {
 }
 
 /// 找仍存活窗口的 owned（模态）对话框，返回其标题列表。
+/// 按标题部分匹配重新枚举可见窗口（close 后的最终复查——
+/// IsWindow 对陈旧句柄可能误报关闭，标题复查是权威判据）。
+#[cfg(windows)]
+fn list_windows_by_title(title_part: &str) -> Vec<(isize, String)> {
+    use std::sync::Mutex;
+    let title_lower = title_part.to_lowercase();
+    let windows: Mutex<Vec<(isize, String)>> = Mutex::new(Vec::new());
+    unsafe {
+        EnumWindows(Some(enum_window_titles_cb), &windows as *const _ as isize);
+    }
+    windows
+        .lock()
+        .map(|guard| {
+            guard
+                .iter()
+                .filter(|(_, t)| t.to_lowercase().contains(&title_lower))
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// 模态对话框是顶层窗口且 owner 为宿主窗口（GW_OWNER），WM_CLOSE 被它们拦截。
 #[cfg(windows)]
 fn find_owned_dialogs(alive: &[(isize, String)]) -> Vec<String> {
@@ -1886,9 +1908,11 @@ fn window_action_windows(title_part: &str, action: &str) -> anyhow::Result<ToolR
             for (h, _) in &matches {
                 unsafe { PostMessageW(*h, 0x0010, 0, 0) };
             }
-            // 给窗口处理消息的时间；轮询至多 ~1.6s（App 关闭可能慢）
-            for _ in 0..4 {
-                std::thread::sleep(std::time::Duration::from_millis(400));
+            // 轮询至多 ~2s：快关闭早退；模态对话框拦截时尽早检出（第二次轮询后）
+            // 并立即报告，不再空等到轮询结束。
+            let mut dialogs: Vec<String> = Vec::new();
+            for i in 0..8 {
+                std::thread::sleep(std::time::Duration::from_millis(250));
                 remaining.clear();
                 closed = 0;
                 for (h, title) in &matches {
@@ -1900,6 +1924,21 @@ fn window_action_windows(title_part: &str, action: &str) -> anyhow::Result<ToolR
                 }
                 if remaining.is_empty() {
                     break;
+                }
+                // 第 2 次轮询起查 owned 对话框——命中即提前报告，agent 更快处置
+                if i >= 1 && dialogs.is_empty() {
+                    dialogs = find_owned_dialogs(&remaining);
+                    if !dialogs.is_empty() {
+                        break;
+                    }
+                }
+            }
+            // 最终按标题复查一遍（IsWindow 对陈旧句柄可能误报关闭，且窗口
+            // 可能被系统复用句柄）：再枚举一次，标题仍匹配的视为未关闭。
+            if !remaining.is_empty() {
+                let still_there = list_windows_by_title(title_part);
+                if !still_there.is_empty() {
+                    remaining = still_there;
                 }
             }
             if remaining.is_empty() {
@@ -2795,5 +2834,51 @@ mod tests {
         assert!(input_size > 0, "INPUT struct should have non-zero size");
         assert_eq!(std::mem::size_of::<MOUSEINPUT>(), 32);
         assert_eq!(std::mem::size_of::<KEYBDINPUT>(), 24);
+    }
+}
+
+#[cfg(windows)]
+#[cfg(test)]
+mod close_acceptance_tests {
+    use super::*;
+
+    /// 确定性验收（不走 LLM）：真实记事本窗口 → window_action close →
+    /// 标题复查确认关闭。中英文系统标题都匹配。
+    #[test]
+    fn window_action_close_closes_real_notepad() {
+        use std::time::{Duration, Instant};
+
+        let r = launch_app_windows("notepad", &[]).expect("launch notepad");
+        assert!(r.success, "launch failed: {}", r.output);
+
+        let deadline = Instant::now() + Duration::from_secs(8);
+        loop {
+            let found = list_windows_by_title("记事本")
+                .into_iter()
+                .chain(list_windows_by_title("Notepad"))
+                .next();
+            if found.is_some() {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "notepad window did not appear within 8s"
+            );
+            std::thread::sleep(Duration::from_millis(200));
+        }
+
+        // 先试中文标题，失败再试英文（系统语言差异；ToolResult::fail 是 Ok 值，
+        // 需按 success 判断而不是 or_else）
+        let mut result = window_action_windows("记事本", "close").expect("window_action close");
+        if !result.success {
+            result = window_action_windows("Notepad", "close").expect("window_action close");
+        }
+        assert!(result.success, "close failed: {}", result.output);
+
+        let after = list_windows_by_title("记事本")
+            .into_iter()
+            .chain(list_windows_by_title("Notepad"))
+            .collect::<Vec<_>>();
+        assert!(after.is_empty(), "window still present: {:?}", after);
     }
 }

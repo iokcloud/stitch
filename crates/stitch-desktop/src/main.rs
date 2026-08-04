@@ -20,7 +20,74 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::Manager;
 use tracing_subscriber::EnvFilter;
 
+/// 崩溃条目写入（追加模式，可测试）。
+fn append_crash_entry(dir: &std::path::Path, entry: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    std::fs::create_dir_all(dir)?;
+    let mut f = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(dir.join("crash.log"))?;
+    f.write_all(entry.as_bytes())
+}
+
+/// 崩溃落盘：panic 信息写入配置目录 `crash.log`（时间戳 + 版本 + 消息 + 位置），
+/// 逐条追加。用户遇到崩溃时至少可查、可反馈；默认 hook 仍先执行（调试可见）。
+#[cfg(not(test))]
+fn install_crash_hook() {
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        default_hook(info);
+        let location = info
+            .location()
+            .map(|l| l.to_string())
+            .unwrap_or_else(|| "?".to_string());
+        let entry = format!(
+            "[{}] v{} {} @ {}\n",
+            chrono::Local::now().format("%Y-%m-%d %H:%M:%S"),
+            env!("CARGO_PKG_VERSION"),
+            info,
+            location
+        );
+        if let Some(dir) = stitch::config::config_path().parent() {
+            let _ = append_crash_entry(dir, &entry);
+        }
+    }));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::append_crash_entry;
+
+    #[test]
+    fn crash_entry_appends_to_log() {
+        let dir = std::env::temp_dir().join(format!("stitch-crash-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        append_crash_entry(&dir, "[2026-08-04 10:00:00] v0.2.1 boom @ main.rs:1\n").unwrap();
+        append_crash_entry(&dir, "[2026-08-04 10:01:00] v0.2.1 boom2 @ main.rs:2\n").unwrap();
+        let log = std::fs::read_to_string(dir.join("crash.log")).unwrap();
+        assert_eq!(log.lines().count(), 2);
+        assert!(log.contains("v0.2.1 boom"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn crash_entry_creates_missing_dir() {
+        let dir =
+            std::env::temp_dir().join(format!("stitch-crash-test-nested-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let nested = dir.join("a").join("b");
+        append_crash_entry(&nested, "x\n").unwrap();
+        assert!(nested.join("crash.log").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
 fn main() {
+    // ── 崩溃上报（最早安装，任何后续 panic 都可落盘）──
+    #[cfg(not(test))]
+    install_crash_hook();
+
     // ── Single-instance lock ────────────────────────────────────
     if !platform::try_acquire() {
         std::process::exit(0);
