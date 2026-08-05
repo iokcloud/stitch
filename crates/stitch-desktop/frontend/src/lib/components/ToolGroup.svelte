@@ -5,10 +5,15 @@
 
   interface Props {
     tools: ChatItem[];
+    /** 组展开状态（受控——由 ChatView 持有，虚拟化重建不还原收起）。 */
+    open: boolean;
+    /** 组展开状态写回（ChatView 存会话级 map）。 */
+    onToggleGroup?: (open: boolean) => void;
+    /** 工具展开状态写回（透传给内部 ToolStatus；虚拟化重建不还原展开）。 */
+    onToggleTool?: (toolId: string, open: boolean) => void;
   }
 
-  let { tools }: Props = $props();
-  let open = $state(false);
+  let { tools, open, onToggleGroup = undefined, onToggleTool = undefined }: Props = $props();
 
   const count = $derived(tools.length);
   const labels = $derived(
@@ -35,7 +40,7 @@
     aria-label={open ? "收起" : "展开"}
     title={open ? "收起" : "展开"}
     data-testid="tool-group-toggle"
-    onclick={() => (open = !open)}
+    onclick={() => onToggleGroup?.(!open)}
   >
     <span class="tool-call-chevron" class:open aria-hidden="true">
       <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -70,6 +75,7 @@
             recorded={!!tool.recorded}
             stacked={i > 0}
             metrics={tool.metrics}
+            onToggle={(o) => onToggleTool?.(tool.id, o)}
           />
         {/if}
       {/each}

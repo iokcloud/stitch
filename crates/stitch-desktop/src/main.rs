@@ -262,6 +262,8 @@ fn main() {
             commands::finish_startup,
             commands::check_update,
             commands::install_update,
+            commands::fetch_announce,
+            commands::set_window_title,
             commands::frontend_log,
             commands::save_window_state,
             commands::set_compact_mode,

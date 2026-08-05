@@ -16,6 +16,8 @@
     recorded?: boolean;
     /** Per-tool benchmark metrics (duration_ms, …); exposed as data attr for tests/benchmark. */
     metrics?: Record<string, number>;
+    /** 展开状态写回（用户手动折叠后虚拟化重建/视图重建不还原展开）。 */
+    onToggle?: (open: boolean) => void;
   }
 
   let {
@@ -29,6 +31,7 @@
     stacked = false,
     recorded = false,
     metrics = undefined,
+    onToggle = undefined,
   }: Props = $props();
   let open = $state(false);
   let copied = $state(false);
@@ -53,6 +56,17 @@
   const listingEntries = $derived(Array.isArray(listing?.entries) ? listing.entries : []);
   /** User cancelled while this tool was still running. */
   const interrupted = $derived(done && !error && /^已停止/.test((summary || "").trim()));
+
+  /** 运行中单行实时尾巴——最新一行输出，卡片高度稳定不抢滚动。 */
+  const liveTail = $derived.by(() => {
+    if (!detail) return "";
+    const lines = detail
+      .split(/\r?\n/)
+      .map((l) => l.trimEnd())
+      .filter((l) => l.length > 0);
+    const last = lines[lines.length - 1] ?? "";
+    return last.length > 120 ? `${last.slice(0, 117)}…` : last;
+  });
 
   const headline = $derived.by(() => {
     if (!done) return "运行中";
@@ -171,7 +185,10 @@
       aria-expanded={open}
       aria-label={open ? "收起" : "展开"}
       title={open ? "收起" : "展开"}
-      onclick={() => (open = !open)}
+      onclick={() => {
+        open = !open;
+        onToggle?.(open);
+      }}
     >
       <span class="tool-call-chevron" class:open aria-hidden="true">
         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -264,10 +281,18 @@
       <i class="is-indeterminate"></i>
     </div>
     {#if detail}
-      <!-- ADR-037: live stdout/stderr while the command runs. -->
-      <div class="tool-shell tool-shell-live" data-testid="tool-live-output">
-        <pre class="tool-shell-body" bind:this={liveBodyEl}>{detail}</pre>
-      </div>
+      <!-- ADR-037: live stdout/stderr while the command runs. 默认只显示单行
+           实时尾巴（高度稳定，不抢占聊天滚动）；点击展开看完整输出。 -->
+      {#if open}
+        <div class="tool-shell tool-shell-live" data-testid="tool-live-output">
+          <pre class="tool-shell-body" bind:this={liveBodyEl}>{detail}</pre>
+        </div>
+      {:else}
+        <div class="tool-live-tail" data-testid="tool-live-tail" title={liveTail}>
+          <span class="tool-live-tail-mark" aria-hidden="true">▸</span>
+          <span class="tool-live-tail-text truncate">{liveTail}</span>
+        </div>
+      {/if}
     {/if}
   {/if}
 

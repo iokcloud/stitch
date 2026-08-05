@@ -78,7 +78,9 @@
       needsClamp = true;
       return;
     }
-    needsClamp = bodyEl !== undefined && bodyEl.scrollHeight > CLAMP_MAX_PX;
+    // Svelte 5 卸载时 bind:this 置 null（非 undefined）——await tick 后块可能
+    // 已被虚拟化卸载，null 漏过 undefined guard 会炸 scrollHeight。
+    needsClamp = bodyEl != null && bodyEl.scrollHeight > CLAMP_MAX_PX;
   }
 
   async function copy() {

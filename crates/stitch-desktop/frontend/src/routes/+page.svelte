@@ -9,7 +9,11 @@
   import CheckpointDialog from "$lib/components/CheckpointDialog.svelte";
   import DiagBanner from "$lib/components/DiagBanner.svelte";
   import ToastStack from "$lib/components/ToastStack.svelte";
+  import UpdateBanner from "$lib/components/UpdateBanner.svelte";
+  import AnnounceBanner from "$lib/components/AnnounceBanner.svelte";
   import { pushToast } from "$lib/stores/toasts";
+  import { updateStore } from "$lib/stores/update.svelte";
+  import { announceStore } from "$lib/stores/announce.svelte";
   import CommandPalette from "$lib/components/CommandPalette.svelte";
   import ShortcutsDialog from "$lib/components/ShortcutsDialog.svelte";
   import {
@@ -109,7 +113,17 @@ import { terminalOpen, toggleTerminal } from "$lib/terminal/store";
 
   function paintReady(): Promise<void> {
     return new Promise((resolve) => {
-      requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+      let settled = false;
+      const finish = () => {
+        if (!settled) {
+          settled = true;
+          resolve();
+        }
+      };
+      // rAF 在窗口被遮挡/最小化时被浏览器节流，两步帧可能延迟数秒——
+      // 超时兜底，避免 revealWindow 拖住后续初始化（事件监听器注册）。
+      setTimeout(finish, 400);
+      requestAnimationFrame(() => requestAnimationFrame(finish));
     });
   }
 
@@ -313,12 +327,9 @@ import { terminalOpen, toggleTerminal } from "$lib/terminal/store";
         nav.showFirstRun();
       }
 
-      // Reveal UI before event wiring — never leave the splash overlay
-      // blocking clicks while listen() is pending.
-      initState.set({ phase: "ready" });
-      await revealWindow();
-      diag(`revealed; view=${nav.view}`);
-
+      // 事件监听器先于 revealWindow 注册——paintReady 依赖 rAF，窗口被遮挡
+      // 时可能延迟数秒，期间到达的 agent 事件（工具开始/输出）会全部丢失。
+      // listen() 是单次 invoke，近即时，不会拖住启动。
       unlisten = await listenAgentEvents((ev) => {
           const sid = activeStreamSid();
           switch (ev.type) {
@@ -602,6 +613,10 @@ import { terminalOpen, toggleTerminal } from "$lib/terminal/store";
             }
           }
         });
+
+      initState.set({ phase: "ready" });
+      await revealWindow();
+      diag(`revealed; view=${nav.view}`);
     }
 
     // Hard safety: if bootstrap hangs, still unlock the UI.
@@ -700,6 +715,15 @@ import { terminalOpen, toggleTerminal } from "$lib/terminal/store";
       window.removeEventListener("keydown", onKey);
       unlisten?.();
     };
+  });
+
+  // 升级提醒 + 功能公告：进入聊天视图（含首次向导完成后）静默检查一次。
+  // store 内部自守卫——同次启动只查一次，从设置返回聊天不会重查。
+  $effect(() => {
+    if (nav.view === "chat") {
+      void updateStore.checkNow();
+      void announceStore.checkNow();
+    }
   });
 </script>
 
@@ -801,3 +825,5 @@ import { terminalOpen, toggleTerminal } from "$lib/terminal/store";
 <CommandPalette />
 <ShortcutsDialog />
 <ToastStack />
+<AnnounceBanner />
+<UpdateBanner />

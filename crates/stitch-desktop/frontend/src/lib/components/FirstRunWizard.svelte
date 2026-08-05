@@ -55,6 +55,7 @@
   }
 
   function skip() {
+    nav.dismissFirstRun();
     nav.showSettings({ firstRun: true });
   }
 </script>

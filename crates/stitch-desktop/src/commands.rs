@@ -3754,3 +3754,50 @@ mod local_skills_tests {
         let _ = fs::remove_dir_all(&home);
     }
 }
+
+// ── Announcement（新功能公告）────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Announcement {
+    pub id: String,
+    pub title: String,
+    pub body: String,
+    #[serde(default)]
+    pub url: Option<String>,
+}
+
+/// 拉取官网公告 JSON（新功能公告横幅，与更新 manifest 同源发布）。
+/// 失败 / 404 / 空 id → Ok(None) 静默（公告是尽力而为，绝不打扰）。
+#[tauri::command]
+pub async fn fetch_announce() -> Result<Option<Announcement>, String> {
+    const ANNOUNCE_URL: &str = "https://www.promptstdio.com/stitch-announce.json";
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(8))
+        .build()
+        .map_err(|e| format!("公告客户端创建失败: {e}"))?;
+    let resp = client.get(ANNOUNCE_URL).send().await;
+    match resp {
+        Ok(r) if r.status().is_success() => match r.json::<Announcement>().await {
+            Ok(a) if !a.id.is_empty() => Ok(Some(a)),
+            _ => Ok(None),
+        },
+        _ => Ok(None),
+    }
+}
+
+/// 会话标题同步到窗口标题（任务栏多开识别）；空标题还原默认。
+#[tauri::command]
+pub fn set_window_title(app: tauri::AppHandle, title: String) -> Result<(), String> {
+    let t = title.trim();
+    let final_title = if t.is_empty() {
+        "Stitch — PromptStdio Agent".to_string()
+    } else {
+        format!("{t} — Stitch")
+    };
+    if let Some(w) = app.get_webview_window("main") {
+        w.set_title(&final_title)
+            .map_err(|e| format!("设置窗口标题失败: {e}"))?;
+    }
+    Ok(())
+}

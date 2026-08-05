@@ -1209,6 +1209,137 @@ body {
     color: var(--color-foreground);
     background: var(--color-rail);
 }
+/* 侧栏分割线 = 拖拽线（同一元素，零错位）：常驻 1px 分隔线，
+ * hover/focus 时 accent 加宽高亮；拖动调宽（clamp 200–480），双击还原。 */
+.sidebar-resizer {
+    position: relative;
+    flex-shrink: 0;
+    width: 7px;
+    margin-left: -7px;
+    z-index: 5;
+    cursor: col-resize;
+    background: transparent;
+}
+.sidebar-resizer::after {
+    content: "";
+    position: absolute;
+    /* 线落在原 aside border-r 位置（resizer 右缘）——与热区右端对齐。 */
+    inset: 0 0 0 6px;
+    border-radius: 2px;
+    background: var(--color-border-strong);
+    transition: background 120ms ease, inset 120ms ease;
+}
+.sidebar-resizer:hover::after,
+.sidebar-resizer:focus-visible::after {
+    inset: 0 0 0 5px;
+    background: var(--color-brand-accent);
+}
+.sidebar-resizer:focus-visible {
+    outline: none;
+}
+/* 拖动中：侧栏宽度过渡去掉（实时跟手），body 禁文本选中。 */
+[data-testid="chat-sidebar"].sidebar-resizing {
+    transition: opacity 150ms ease;
+}
+.sidebar-resizing-body {
+    user-select: none;
+    cursor: col-resize;
+}
+/* 功能公告横幅 — 启动拉取官网公告 JSON，未读时右下角出现，可「知道了/稍后」。 */
+.announce-banner {
+    position: fixed;
+    right: 1rem;
+    bottom: 1rem;
+    z-index: 72;
+    display: flex;
+    align-items: flex-start;
+    gap: 0.75rem;
+    max-width: 24rem;
+    padding: 0.7rem 0.7rem 0.7rem 0.85rem;
+    border: 1px solid var(--color-border-strong);
+    border-radius: var(--radius-md);
+    background: var(--color-surface);
+    box-shadow: 0 10px 28px color-mix(in srgb, var(--color-shadow) 22%, transparent);
+    animation: toast-in 160ms ease;
+}
+.announce-banner-body {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+}
+.announce-banner-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--color-foreground);
+}
+.announce-banner-text {
+    font-size: 12px;
+    line-height: 1.45;
+    color: var(--color-muted);
+    word-break: break-word;
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+.announce-banner-actions {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.35rem;
+}
+/* 公告与升级提醒同角并存时：升级横幅上移错开。 */
+.announce-banner + .update-banner {
+    bottom: calc(1rem + 96px);
+}
+/* 启动更新提醒横幅 — 有新版本时右下角出现，可「稍后」关闭（每次启动一次）。 */
+.update-banner {
+    position: fixed;
+    right: 1rem;
+    bottom: 1rem;
+    z-index: 71;
+    display: flex;
+    align-items: flex-start;
+    gap: 0.75rem;
+    max-width: 22rem;
+    padding: 0.7rem 0.7rem 0.7rem 0.85rem;
+    border: 1px solid color-mix(in srgb, var(--color-brand-accent) 45%, var(--color-border-strong));
+    border-radius: var(--radius-md);
+    background: var(--color-surface);
+    box-shadow: 0 10px 28px color-mix(in srgb, var(--color-shadow) 22%, transparent);
+    animation: toast-in 160ms ease;
+}
+.update-banner-body {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+}
+.update-banner-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--color-foreground);
+}
+.update-banner-notes {
+    font-size: 12px;
+    line-height: 1.45;
+    color: var(--color-muted);
+    word-break: break-word;
+    white-space: pre-wrap;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+.update-banner-actions {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.35rem;
+}
 @keyframes toast-in {
     from {
         opacity: 0;
@@ -1491,7 +1622,6 @@ body {
     /* Cap tool stdout/stderr; scroll inside the chip (no overlay fade). */
     max-height: min(28vh, 10rem);
     overflow: auto;
-    overscroll-behavior: contain;
     font-size: 11px;
     font-family: var(--font-mono);
     line-height: 1.45;
@@ -1516,7 +1646,6 @@ body {
     background: var(--color-surface);
     max-height: min(36vh, 14rem);
     overflow: auto;
-    overscroll-behavior: contain;
     scrollbar-gutter: stable;
 }
 .tool-listing-root {
@@ -1579,13 +1708,36 @@ body {
     padding: 0.45rem 0.7rem 0.55rem;
     max-height: min(28vh, 10rem);
     overflow: auto;
-    overscroll-behavior: contain;
     font-size: 11px;
     font-family: var(--font-mono);
     line-height: 1.45;
     white-space: pre-wrap;
     word-break: break-word;
     scrollbar-gutter: stable;
+}
+/* 运行中单行实时尾巴——保持卡片高度稳定，不抢占聊天滚动（主流工具行为）。 */
+.tool-live-tail {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.32rem 0.7rem 0.42rem;
+    border-top: 1px solid var(--color-border);
+    background: var(--color-shell-bg);
+    color: var(--color-shell-fg);
+    font-size: 11px;
+    font-family: var(--font-mono);
+    line-height: 1.4;
+    white-space: nowrap;
+    overflow: hidden;
+}
+.tool-live-tail-mark {
+    flex-shrink: 0;
+    color: var(--color-brand-accent);
+}
+.tool-live-tail-text {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 .spin {
     width: 12px;
@@ -4061,7 +4213,6 @@ body {
 .md-content pre,
 .md-content .md-block-scroll {
     overflow: auto;
-    overscroll-behavior: contain;
     max-height: min(40vh, 18rem);
     padding: 10px 12px;
     border-radius: 0;
@@ -4084,7 +4235,6 @@ body {
 }
 .md-content .md-table-scroll {
     overflow: auto;
-    overscroll-behavior: contain;
     max-width: 100%;
     max-height: min(36vh, 16rem);
     margin: 0.45em 0;
@@ -4119,7 +4269,6 @@ body {
     color: var(--color-foreground-secondary);
     max-height: min(28vh, 12rem);
     overflow: auto;
-    overscroll-behavior: contain;
 }
 .md-content code {
     font-family: var(--font-mono);

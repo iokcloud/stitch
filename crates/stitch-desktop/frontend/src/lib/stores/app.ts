@@ -1,6 +1,6 @@
 import { writable, get } from "svelte/store";
 import type { ConfigSnapshot, RememberRule } from "../types";
-import { AUTO_CONTINUE_KEY, PLAN_MODE_KEY, RECENT_DIRS_KEY, SIDEBAR_KEY, SIDEBAR_TAB_KEY } from "../types";
+import { AUTO_CONTINUE_KEY, PLAN_MODE_KEY, RECENT_DIRS_KEY, SIDEBAR_KEY, SIDEBAR_TAB_KEY, SIDEBAR_WIDTH_KEY } from "../types";
 import * as ipc from "../ipc";
 
 export type InitState =
@@ -18,6 +18,51 @@ export const sidebarCollapsed = writable(
         }
     })(),
 );
+
+/** 侧栏宽度 px（可拖分割线调整；折叠只隐藏不改变宽度）。 */
+export const SIDEBAR_WIDTH_MIN = 200;
+export const SIDEBAR_WIDTH_MAX = 480;
+export const SIDEBAR_WIDTH_DEFAULT = 256;
+
+/** clamp 到 [MIN, min(MAX, 窗口宽 45%)]——窄窗口下不挤垮主聊天区。 */
+export function clampSidebarWidth(raw: number): number {
+    const viewportMax = Math.round(
+        (typeof window !== "undefined" ? window.innerWidth : 1920) * 0.45,
+    );
+    return Math.min(
+        SIDEBAR_WIDTH_MAX,
+        viewportMax,
+        Math.max(SIDEBAR_WIDTH_MIN, Math.round(raw)),
+    );
+}
+
+export const sidebarWidth = writable(
+    (() => {
+        try {
+            const stored = localStorage.getItem(SIDEBAR_WIDTH_KEY);
+            // Number(null) === 0——必须判 null，否则无值被 clamp 到下限。
+            if (stored !== null) {
+                const raw = Number(stored);
+                if (Number.isFinite(raw)) {
+                    return clampSidebarWidth(raw);
+                }
+            }
+        } catch {
+            /* ignore */
+        }
+        return SIDEBAR_WIDTH_DEFAULT;
+    })(),
+);
+
+export function setSidebarWidth(width: number) {
+    const w = clampSidebarWidth(width);
+    sidebarWidth.set(w);
+    try {
+        localStorage.setItem(SIDEBAR_WIDTH_KEY, String(w));
+    } catch {
+        /* ignore */
+    }
+}
 
 export const lastUserMessage = writable("");
 /** Analytics: where the current turn started (`chat` | `scene`). */

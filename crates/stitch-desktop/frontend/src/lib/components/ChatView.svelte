@@ -5,6 +5,11 @@
     workDir,
     sidebarCollapsed,
     toggleSidebar,
+    sidebarWidth,
+    setSidebarWidth,
+    SIDEBAR_WIDTH_DEFAULT,
+    SIDEBAR_WIDTH_MAX,
+    SIDEBAR_WIDTH_MIN,
     lastUserMessage,
     lastSendSource,
     workDirDialogOpen,
@@ -34,6 +39,7 @@ import { stream } from "../stores/stream.svelte";
     switchSession,
     ensureSession,
     appendItem,
+    patchItem,
     removeItem,
     removeItemsAfter,
     removeItemsFrom,
@@ -106,9 +112,35 @@ import { stream } from "../stores/stream.svelte";
     desc: string;
   }>({ open: false, name: "", title: "", desc: "" });
   let messagesEl: HTMLDivElement | undefined = $state();
-  /** 长文展开状态（blockKey → 展开）——虚拟化重建块时保持展开。
-   * 整体替换赋值（$state proxy 明确拦截——Set mutation 有版本差异风险）。 */
-  let expandedBlocks = $state<Record<string, boolean>>({});
+  /** 侧栏分割线拖动中（拖实时去 aside 宽度过渡动画）。 */
+  let resizingSidebar = $state(false);
+
+  function onResizePointerDown(_e: PointerEvent) {
+    // 不能 preventDefault：会阻止 click/dblclick 合成事件，双击还原失效。
+    // 文本选中由拖动中 body.sidebar-resizing-body 的 user-select:none 处理。
+    const startX = _e.clientX;
+    const startWidth = $sidebarWidth;
+    resizingSidebar = true;
+    document.body.classList.add("sidebar-resizing-body");
+    const move = (ev: PointerEvent) => {
+      setSidebarWidth(startWidth + (ev.clientX - startX));
+    };
+    const up = () => {
+      resizingSidebar = false;
+      document.body.classList.remove("sidebar-resizing-body");
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  }
+
+  function resetSidebarWidth() {
+    setSidebarWidth(SIDEBAR_WIDTH_DEFAULT);
+  }
+
+  /** 长文展开状态（模块级单例——虚拟化重建与视图切换都保持；重启即折叠）。 */
+  import { timelineUI } from "../stores/timeline-ui.svelte";
   let inputEl: HTMLTextAreaElement | undefined = $state();
   let stickToBottom = $state(true);
   let nowMs = $state(Date.now());
@@ -139,6 +171,14 @@ const PLAN_MODE_LABELS: Record<string, string> = {
 
   $effect(() => {
     ensureSessionLlm();
+  });
+
+  // 窗口标题跟随会话名（任务栏多开识别）；「新会话」/空 → 还原默认。
+  $effect(() => {
+    const title = $currentSession?.title?.trim() ?? "";
+    void ipc
+      .setWindowTitle(title && title !== "新会话" ? title : "")
+      .catch(() => {});
   });
 
   $effect(() => {
@@ -318,6 +358,7 @@ const PLAN_MODE_LABELS: Record<string, string> = {
   // viewport; keep an invisible top spacer so scrollbar/scrollIntoView stay
   // coherent. Item counts are small enough that height-estimation stays cheap.
   const EST_TOOL = 72;
+  const EST_TOOL_EXPANDED = 280;
   const EST_MSG = 180;
   const EST_PLAN = 260;
   const EST_SEDIMENT = 300;
@@ -336,10 +377,20 @@ const PLAN_MODE_LABELS: Record<string, string> = {
 
   function estimateBlockHeight(block: TimelineBlock): number {
     if (block.kind === "tool_group") {
-      return 44 + block.items.length * 30;
+      // 组内展开（失败自动展开/用户展开）的工具卡实际远超 30px——
+      // 按展开态高估，未挂载时 spacer 不低估（低估会截断真实内容）。
+      let acc = 44;
+      for (const t of block.items) {
+        acc += t.type === "tool" && (t.expanded || !t.done) ? EST_TOOL_EXPANDED : 30;
+      }
+      return acc;
     }
     const item = block.item;
-    if (item.type === "tool") return EST_TOOL;
+    if (item.type === "tool") {
+      // 展开态（失败自动展开/运行中展开看输出）高度远超折叠态——按展开
+      // 高估，宁可滚到底多一段空白（挂载后测量回填收敛），不可低估截断。
+      return item.expanded || !item.done ? EST_TOOL_EXPANDED : EST_TOOL;
+    }
     if (item.type === "plan") return EST_PLAN;
     if (item.type === "sediment") return EST_SEDIMENT;
     return EST_MSG;
@@ -399,16 +450,15 @@ const PLAN_MODE_LABELS: Record<string, string> = {
       : timeline,
   );
 
-  /** 切会话清跨会话残留（blockKey 是消息 id——历史会话键永远不再命中）。 */
-  let recordPrunedSession: string | null = null;
+  /** 切会话清跨会话残留（blockKey 是消息 id——历史会话键永远不再命中）。
+   * 哨兵在 timelineUI 模块级：视图重建后组件变量归零会把重建误判成切会话。 */
   /** 字体就绪后 +1，触发测量 effect 重跑一轮（写入时已按 status 过滤失真值）。 */
   let fontsReadyTick = $state(0);
   let fontsRemeasured = false;
   $effect(() => {
     const sid = $currentSessionId;
-    if (sid === recordPrunedSession) return;
-    recordPrunedSession = sid;
-    expandedBlocks = {};
+    timelineUI.clearExpandedBlocks(sid);
+    if (sid === timelineUI.lastPrunedSession) return;
     measuredHeights = {};
     observedBlockKeys.clear();
     blockRO?.disconnect();
@@ -474,7 +524,7 @@ const PLAN_MODE_LABELS: Record<string, string> = {
     // spacer 一直按折叠态估算走，滚动跨过展开块时会整段跳变。
     // 依赖 virtualWindow.start/end + renderTick：滚动使窗口移动后新进入
     // 视口的块立即重测（修复向下滚动重叠闪烁）。
-    expandedBlocks;
+    timelineUI.expandedBlocks;
     fontsReadyTick;
     virtualWindow.start;
     virtualWindow.end;
@@ -782,8 +832,11 @@ const PLAN_MODE_LABELS: Record<string, string> = {
   $effect(() => {
     const streaming = stream.isStreaming;
     if (wasStreaming && !streaming) {
-      stickToBottom = true;
-      void scrollAnswerIntoView();
+      // 用户若已上滚阅读（stickToBottom=false），回合结束不抢占滚动位置；
+      // 只有原本跟随底部时才把答案钉入视野（主流聊天工具行为）。
+      if (stickToBottom) {
+        void scrollAnswerIntoView();
+      }
     }
     wasStreaming = streaming;
   });
@@ -1232,8 +1285,10 @@ const PLAN_MODE_LABELS: Record<string, string> = {
   style="min-height: 100%;"
 >
   <aside
-    class="flex flex-col border-r border-[var(--color-border-strong)] bg-[var(--color-rail)] transition-[width,opacity] duration-150
+    class="flex flex-col bg-[var(--color-rail)] transition-[width,opacity] duration-150
+      {resizingSidebar ? 'sidebar-resizing' : ''}
       {$sidebarCollapsed ? 'w-0 opacity-0 overflow-hidden' : 'w-[var(--sidebar-w)] opacity-100'}"
+    style="--sidebar-w: {$sidebarWidth}px"
     data-testid="chat-sidebar"
   >
     <div class="side-nav">
@@ -1289,6 +1344,32 @@ const PLAN_MODE_LABELS: Record<string, string> = {
       />
     {/if}
   </aside>
+
+  {#if !$sidebarCollapsed}
+    <!-- 左右侧分割线：拖动调宽（clamp 200–480），双击还原，←/→ 键盘微调。 -->
+    <div
+      class="sidebar-resizer"
+      tabindex="0"
+      role="separator"
+      aria-orientation="vertical"
+      aria-label="调整侧栏宽度"
+      aria-valuenow={$sidebarWidth}
+      aria-valuemin={SIDEBAR_WIDTH_MIN}
+      aria-valuemax={SIDEBAR_WIDTH_MAX}
+      data-testid="sidebar-resizer"
+      onpointerdown={onResizePointerDown}
+      ondblclick={resetSidebarWidth}
+      onkeydown={(e) => {
+        if (e.key === "ArrowLeft") {
+          setSidebarWidth($sidebarWidth - 16);
+          e.preventDefault();
+        } else if (e.key === "ArrowRight") {
+          setSidebarWidth($sidebarWidth + 16);
+          e.preventDefault();
+        }
+      }}
+    />
+  {/if}
 
   <div class="flex flex-col flex-1 min-w-0 min-h-0 bg-[var(--color-chat-pane)]">
     <header
@@ -1569,7 +1650,16 @@ const PLAN_MODE_LABELS: Record<string, string> = {
         {#each visibleBlocks as block (blockKey(block))}
           {#if block.kind === "tool_group"}
             <div class="chat-item is-tool tool-stack-start tool-stack-end" data-block-key={blockKey(block)}>
-              <ToolGroup tools={block.items} />
+              <ToolGroup
+                tools={block.items}
+                open={block.items[0]?.type === "tool" ? !!block.items[0].groupExpanded : false}
+                onToggleGroup={(o) => {
+                  // 存组内首工具上——虚拟化/视图重建/重启都保持（与 expanded 同模式）。
+                  const first = block.items[0];
+                  if (first?.id) patchItem(first.id, { groupExpanded: o }, $currentSessionId);
+                }}
+                onToggleTool={(tid, o) => patchItem(tid, { expanded: o }, $currentSessionId)}
+              />
             </div>
           {:else}
             {@const item = block.item}
@@ -1600,10 +1690,10 @@ const PLAN_MODE_LABELS: Record<string, string> = {
                   images={item.images}
                   imagesStripped={item.imagesStripped}
                   streaming={item.id === streamingId && stream.isStreaming}
-                  expanded={!!expandedBlocks[blockKey(block)]}
+                  expanded={!!timelineUI.expandedBlocks[blockKey(block)]}
                   onToggleExpanded={(v) => {
                     const key = blockKey(block);
-                    expandedBlocks = { ...expandedBlocks, [key]: v };
+                    timelineUI.expandedBlocks = { ...timelineUI.expandedBlocks, [key]: v };
                     // 视觉锚定：展开/收起改变块高，虚拟窗口按新高度重排（测量在
                     // 下一帧写入）。块顶部在展开/收起时不动（增长在块内部），但
                     // 贴窗口边缘的块可能在重排后超界被虚拟化裁出。等测量完成后
@@ -1679,6 +1769,7 @@ const PLAN_MODE_LABELS: Record<string, string> = {
                     ? nowMs - (item.startedAt ?? stream.streamStartedAt ?? nowMs)
                     : 0}
                   metrics={item.metrics}
+                  onToggle={(o) => patchItem(item.id, { expanded: o }, $currentSessionId)}
                 />
               {:else if item.type === "plan"}
                 <PlanCard

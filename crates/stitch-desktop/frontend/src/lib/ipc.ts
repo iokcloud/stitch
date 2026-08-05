@@ -4,6 +4,7 @@ import type {
     AgentEvent,
     AgentSummary,
     AllowRule,
+    Announcement,
     ConfigSnapshot,
     HistoryMessage,
     RememberRule,
@@ -386,6 +387,15 @@ export async function finishStartup(dark: boolean): Promise<void> {
 
 export async function clearTaskbarProgress(): Promise<void> {
     return invoke("clear_taskbar_progress");
+}
+
+/** 会话标题同步到窗口标题（任务栏识别）；空标题还原默认。 */
+export async function setWindowTitle(title: string): Promise<void> {
+    return invoke("set_window_title", { title });
+}
+
+export async function fetchAnnounce(): Promise<Announcement | null> {
+    return invoke("fetch_announce");
 }
 
 export async function checkUpdate(): Promise<UpdateStatus> {

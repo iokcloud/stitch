@@ -1067,13 +1067,32 @@ impl StitchConfig {
 
 /// Returns the config file path (`directories` ProjectDirs `config_dir` + `config.toml`).
 /// On Windows this is typically `%APPDATA%/promptstdio/stitch/config/config.toml`.
-pub fn config_path() -> std::path::PathBuf {
-    directories::ProjectDirs::from("com", "promptstdio", "stitch")
-        .map(|d| d.config_dir().join("config.toml"))
+/// 配置根目录（config.toml/窗口状态/allow_rules/crash.log 所在）。
+/// - `STITCH_CONFIG_DIR` 环境变量优先（真机探针注入正式目录用）；
+/// - debug 构建（cargo build）用 `stitch-dev`——与正式安装包完全隔离，
+///   避免调试数据（会话/窗口状态/规则）污染正式包（用户要求）；
+/// - release 用 `stitch`。
+pub fn config_dir() -> std::path::PathBuf {
+    if let Ok(dir) = std::env::var("STITCH_CONFIG_DIR")
+        && !dir.trim().is_empty()
+    {
+        return std::path::PathBuf::from(dir);
+    }
+    let app = if cfg!(debug_assertions) {
+        "stitch-dev"
+    } else {
+        "stitch"
+    };
+    directories::ProjectDirs::from("com", "promptstdio", app)
+        .map(|d| d.config_dir().to_path_buf())
         .unwrap_or_else(|| {
             let home = dirs_fallback();
-            home.join(".config").join("stitch").join("config.toml")
+            home.join(".config").join(app)
         })
+}
+
+pub fn config_path() -> std::path::PathBuf {
+    config_dir().join("config.toml")
 }
 
 /// Mistaken path used by early provision scripts: `…/stitch/config.toml`

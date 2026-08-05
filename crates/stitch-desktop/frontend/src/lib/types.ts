@@ -78,6 +78,13 @@ export interface ConfigSnapshot {
   local_vision?: LocalVisionSnapshot;
 }
 
+export interface Announcement {
+  id: string;
+  title: string;
+  body: string;
+  url?: string;
+}
+
 export interface UpdateStatus {
   available: boolean;
   current_version: string;
@@ -185,6 +192,8 @@ export type ChatItem =
       summary: string;
       detail: string;
       expanded?: boolean;
+      /** 所在工具组展开状态（存组内首工具上——虚拟化/视图重建不还原收起）。 */
+      groupExpanded?: boolean;
       /** Wall-clock start of this tool (ms) for live elapsed display. */
       startedAt?: number;
       /** Started while skill-recording mode was active. */
@@ -385,6 +394,8 @@ export const PROD_API_BASE = "https://www.promptstdio.com";
 export const SESSIONS_KEY = "stitch-sessions";
 export const THEME_KEY = "stitch-theme";
 export const SIDEBAR_KEY = "stitch-sidebar-collapsed";
+/** 侧栏宽度 px（可拖分割线调整，clamp 200–480）。 */
+export const SIDEBAR_WIDTH_KEY = "stitch-sidebar-width";
 export const RECENT_DIRS_KEY = "stitch-recent-dirs";
 export const WORKSPACES_KEY = "stitch-workspaces";
 /** Per-workspace sidebar collapse: `{ [workspaceId]: true }` means collapsed. */
