@@ -57,7 +57,7 @@ jobs:
         working-directory: crates/stitch-desktop
         run: bash scripts/build-ui.sh
 
-      - uses: tauri-apps/tauri-action@v0
+      - uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # 安装包签名密钥（用户在本机 ~/.stitch/updater.key；配置到仓库 secrets 后启用）
