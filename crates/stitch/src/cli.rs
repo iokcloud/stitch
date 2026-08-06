@@ -53,6 +53,9 @@ pub enum Command {
         #[command(subcommand)]
         action: Option<ConfigAction>,
     },
+
+    /// Upgrade to the latest version (downloads from promptstdio.com)
+    Upgrade,
 }
 
 #[derive(Subcommand)]

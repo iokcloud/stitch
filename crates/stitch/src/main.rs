@@ -40,7 +40,109 @@ async fn run_command(cli: Cli) -> anyhow::Result<()> {
         Command::Login => cmd_login().await,
         Command::Logout => cmd_logout().await,
         Command::Config { action } => cmd_config(action).await,
+        Command::Upgrade => cmd_upgrade().await,
     }
+}
+
+/// 自更新：从官网版本清单拉最新版，下载对应平台二进制并覆盖自身。
+/// 版本清单：https://www.promptstdio.com/downloads/stitch-cli-version.json
+/// （官网 /downloads 直链，国内可直连；GitHub Release 为国际镜像）
+async fn cmd_upgrade() -> anyhow::Result<()> {
+    use std::io::Write;
+
+    const VERSION_URL: &str = "https://www.promptstdio.com/downloads/stitch-cli-version.json";
+    const BASE_URL: &str = "https://www.promptstdio.com/downloads/";
+
+    let current = env!("CARGO_PKG_VERSION");
+    let client = reqwest::Client::new();
+    let version: serde_json::Value = client
+        .get(VERSION_URL)
+        .timeout(std::time::Duration::from_secs(20))
+        .send()
+        .await
+        .map_err(|e| anyhow::anyhow!("无法连接更新服务：{e}（请检查网络）"))?
+        .json()
+        .await
+        .map_err(|e| anyhow::anyhow!("更新清单解析失败：{e}"))?;
+    let latest = version
+        .get("version")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    if latest.is_empty() {
+        anyhow::bail!("更新清单缺少 version 字段");
+    }
+    if latest == current {
+        println!("已是最新版本 v{current}。");
+        return Ok(());
+    }
+    println!("发现新版本 v{latest}（当前 v{current}），开始下载…");
+
+    let file = if cfg!(target_os = "windows") {
+        "stitch-x86_64-pc-windows-msvc.exe"
+    } else if cfg!(target_os = "macos") {
+        if cfg!(target_arch = "aarch64") {
+            "stitch-aarch64-apple-darwin"
+        } else {
+            "stitch-x86_64-apple-darwin"
+        }
+    } else {
+        "stitch-x86_64-unknown-linux-musl"
+    };
+
+    let exe = std::env::current_exe().map_err(|e| anyhow::anyhow!("无法定位当前程序路径：{e}"))?;
+    let tmp = exe.with_file_name(format!(
+        "{}.upgrade",
+        exe.file_name().and_then(|n| n.to_str()).unwrap_or("stitch")
+    ));
+
+    let url = format!("{BASE_URL}{file}");
+    let mut resp = client
+        .get(&url)
+        .timeout(std::time::Duration::from_secs(120))
+        .send()
+        .await
+        .map_err(|e| anyhow::anyhow!("下载失败：{e}"))?;
+    let mut out = std::fs::File::create(&tmp)
+        .map_err(|e| anyhow::anyhow!("无法写入临时文件 {tmp:?}：{e}"))?;
+    while let Some(chunk) = resp
+        .chunk()
+        .await
+        .map_err(|e| anyhow::anyhow!("下载中断：{e}"))?
+    {
+        out.write_all(&chunk)?;
+    }
+    drop(out);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o755));
+    }
+
+    // 覆盖自身：Unix 直接 rename；Windows 运行中的 exe 被锁，提示手动替换
+    match std::fs::rename(&tmp, &exe) {
+        Ok(()) => {
+            println!("已升级到 v{latest}。");
+        }
+        Err(_) if cfg!(windows) => {
+            println!("下载完成，但 Windows 正在运行的程序无法覆盖自身。");
+            println!("请退出当前会话后在同目录执行：");
+            println!(
+                "  move /y \"{}\" \"{}\"",
+                tmp.file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("stitch.exe.upgrade"),
+                exe.file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("stitch.exe"),
+            );
+        }
+        Err(e) => {
+            let _ = std::fs::remove_file(&tmp);
+            anyhow::bail!("升级失败：{e}");
+        }
+    }
+    Ok(())
 }
 
 // -- Run --
