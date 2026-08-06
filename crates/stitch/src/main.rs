@@ -47,7 +47,10 @@ async fn run_command(cli: Cli) -> anyhow::Result<()> {
 /// 自更新：从官网版本清单拉最新版，下载对应平台二进制并覆盖自身。
 /// 版本清单：https://www.promptstdio.com/downloads/stitch-cli-version.json
 /// （官网 /downloads 直链，国内可直连；GitHub Release 为国际镜像）
+/// 完整性：清单带 sha256，下载后比对（不匹配即中止）；防回滚：仅接受
+/// 高于当前版本的更新（语义版本比较）。
 async fn cmd_upgrade() -> anyhow::Result<()> {
+    use sha2::{Digest, Sha256};
     use std::io::Write;
 
     const VERSION_URL: &str = "https://www.promptstdio.com/downloads/stitch-cli-version.json";
@@ -55,7 +58,7 @@ async fn cmd_upgrade() -> anyhow::Result<()> {
 
     let current = env!("CARGO_PKG_VERSION");
     let client = reqwest::Client::new();
-    let version: serde_json::Value = client
+    let manifest: serde_json::Value = client
         .get(VERSION_URL)
         .timeout(std::time::Duration::from_secs(20))
         .send()
@@ -64,7 +67,7 @@ async fn cmd_upgrade() -> anyhow::Result<()> {
         .json()
         .await
         .map_err(|e| anyhow::anyhow!("更新清单解析失败：{e}"))?;
-    let latest = version
+    let latest = manifest
         .get("version")
         .and_then(|v| v.as_str())
         .unwrap_or("")
@@ -72,23 +75,34 @@ async fn cmd_upgrade() -> anyhow::Result<()> {
     if latest.is_empty() {
         anyhow::bail!("更新清单缺少 version 字段");
     }
-    if latest == current {
+    // 防回滚：仅允许升级到更高版本
+    if !version_newer(&latest, current) {
         println!("已是最新版本 v{current}。");
         return Ok(());
     }
     println!("发现新版本 v{latest}（当前 v{current}），开始下载…");
 
-    let file = if cfg!(target_os = "windows") {
-        "stitch-x86_64-pc-windows-msvc.exe"
+    // 平台 → 文件名 + 清单 sha256 key
+    let (file, hash_key): (&str, &str) = if cfg!(target_os = "windows") {
+        ("stitch-x86_64-pc-windows-msvc.exe", "windows")
     } else if cfg!(target_os = "macos") {
         if cfg!(target_arch = "aarch64") {
-            "stitch-aarch64-apple-darwin"
+            ("stitch-aarch64-apple-darwin", "macos-arm")
         } else {
-            "stitch-x86_64-apple-darwin"
+            ("stitch-x86_64-apple-darwin", "macos-x64")
         }
     } else {
-        "stitch-x86_64-unknown-linux-musl"
+        ("stitch-x86_64-unknown-linux-musl", "linux")
     };
+    let expected_sha = manifest
+        .get("sha256")
+        .and_then(|m| m.get(hash_key))
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    if expected_sha.is_empty() {
+        anyhow::bail!("更新清单缺少 sha256.{hash_key} 字段");
+    }
 
     let exe = std::env::current_exe().map_err(|e| anyhow::anyhow!("无法定位当前程序路径：{e}"))?;
     let tmp = exe.with_file_name(format!(
@@ -96,6 +110,7 @@ async fn cmd_upgrade() -> anyhow::Result<()> {
         exe.file_name().and_then(|n| n.to_str()).unwrap_or("stitch")
     ));
 
+    // 下载到临时文件，同时计算 sha256
     let url = format!("{BASE_URL}{file}");
     let mut resp = client
         .get(&url)
@@ -105,14 +120,24 @@ async fn cmd_upgrade() -> anyhow::Result<()> {
         .map_err(|e| anyhow::anyhow!("下载失败：{e}"))?;
     let mut out = std::fs::File::create(&tmp)
         .map_err(|e| anyhow::anyhow!("无法写入临时文件 {tmp:?}：{e}"))?;
+    let mut hasher = Sha256::new();
     while let Some(chunk) = resp
         .chunk()
         .await
         .map_err(|e| anyhow::anyhow!("下载中断：{e}"))?
     {
+        hasher.update(&chunk);
         out.write_all(&chunk)?;
     }
     drop(out);
+
+    // 完整性校验：sha256 不匹配则丢弃并中止（防止损坏/被篡改的二进制）
+    let actual = format!("{:x}", hasher.finalize());
+    if !actual.eq_ignore_ascii_case(&expected_sha) {
+        let _ = std::fs::remove_file(&tmp);
+        anyhow::bail!("下载文件校验失败（sha256 不匹配），已中止升级。");
+    }
+
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -125,7 +150,7 @@ async fn cmd_upgrade() -> anyhow::Result<()> {
             println!("已升级到 v{latest}。");
         }
         Err(_) if cfg!(windows) => {
-            println!("下载完成，但 Windows 正在运行的程序无法覆盖自身。");
+            println!("下载完成（校验通过），但 Windows 正在运行的程序无法覆盖自身。");
             println!("请退出当前会话后在同目录执行：");
             println!(
                 "  move /y \"{}\" \"{}\"",
@@ -143,6 +168,21 @@ async fn cmd_upgrade() -> anyhow::Result<()> {
         }
     }
     Ok(())
+}
+
+/// 语义版本比较：`a` 是否高于 `b`（x.y.z 三段；解析失败视为不高于）。
+fn version_newer(a: &str, b: &str) -> bool {
+    fn parse(v: &str) -> Option<(u64, u64, u64)> {
+        let mut parts = v.trim_start_matches('v').split('.');
+        let x = parts.next()?.parse().ok()?;
+        let y = parts.next().unwrap_or("0").parse().ok()?;
+        let z = parts.next().unwrap_or("0").parse().ok()?;
+        Some((x, y, z))
+    }
+    match (parse(a), parse(b)) {
+        (Some(av), Some(bv)) => av > bv,
+        _ => false,
+    }
 }
 
 // -- Run --
@@ -457,4 +497,20 @@ async fn cmd_config(action: Option<ConfigAction>) -> anyhow::Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::version_newer;
+
+    #[test]
+    fn version_compare_guards_rollback() {
+        assert!(version_newer("0.4.0", "0.3.0"));
+        assert!(version_newer("0.3.1", "0.3.0"));
+        assert!(version_newer("1.0.0", "0.9.9"));
+        assert!(!version_newer("0.3.0", "0.3.0"), "同版本不升级");
+        assert!(!version_newer("0.2.9", "0.3.0"), "低版本不降级");
+        assert!(!version_newer("abc", "0.3.0"), "非法版本不升级");
+        assert!(!version_newer("0.3.0", "abc"));
+    }
 }
