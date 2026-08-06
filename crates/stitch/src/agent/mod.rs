@@ -93,6 +93,12 @@ pub enum AgentEvent {
         context_tokens: usize,
         context_limit: usize,
         compacted: bool,
+        /// 服务端真实缓存命中输入 token（无则 0）。
+        #[serde(default)]
+        cache_hit_tokens: u64,
+        /// 服务端真实缓存未命中输入 token。
+        #[serde(default)]
+        cache_miss_tokens: u64,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         layers: Option<layers::LayerStats>,
     },
@@ -108,6 +114,15 @@ pub enum AgentEvent {
         context_tokens: usize,
         #[serde(default)]
         context_limit: usize,
+        /// 服务端真实缓存命中输入 token（无则 0）。
+        #[serde(default)]
+        cache_hit_tokens: u64,
+        /// 服务端真实缓存未命中输入 token。
+        #[serde(default)]
+        cache_miss_tokens: u64,
+        /// 回合成本估算（人民币，元；Rust 价格表计算）。
+        #[serde(default)]
+        cost: f64,
         /// Turn ended because the iteration budget was exhausted; UI may offer
         /// a one-tap "continue" to resume the same session.
         #[serde(default)]
@@ -406,7 +421,7 @@ async fn run_react_core<R: ReactRenderer>(
                     session.add_assistant_message(&text);
                 }
                 let result = make_result(text.clone(), iteration + 1, &usage, session, model);
-                emit_done(renderer, &result, false);
+                emit_done(renderer, &result, false, model);
                 return Ok(result);
             }
             ResponseType::ToolCalls { text, tool_calls } => {
@@ -485,7 +500,7 @@ async fn run_react_core<R: ReactRenderer>(
             }
             ResponseType::Empty => {
                 let result = make_result(String::new(), iteration + 1, &usage, session, model);
-                emit_done(renderer, &result, false);
+                emit_done(renderer, &result, false, model);
                 return Ok(result);
             }
         }
@@ -539,7 +554,7 @@ async fn run_react_core<R: ReactRenderer>(
             model,
         ),
     };
-    emit_done(renderer, &result, true);
+    emit_done(renderer, &result, true, model);
     Ok(result)
 }
 
@@ -861,6 +876,8 @@ fn emit_usage<R: ReactRenderer>(
         context_tokens,
         context_limit,
         compacted,
+        cache_hit_tokens: usage.cache_hit_tokens,
+        cache_miss_tokens: usage.cache_miss_tokens,
         layers,
     });
 }
@@ -877,7 +894,21 @@ fn flush_turn(
     }
 }
 
-fn emit_done<R: ReactRenderer>(renderer: &mut R, result: &AgentResult, hit_iteration_cap: bool) {
+fn emit_done<R: ReactRenderer>(
+    renderer: &mut R,
+    result: &AgentResult,
+    hit_iteration_cap: bool,
+    model: &str,
+) {
+    let cost = tokens::estimate_cost(
+        &tokens::TokenUsage {
+            input_tokens: result.input_tokens,
+            output_tokens: result.output_tokens,
+            cache_hit_tokens: result.cache_hit_tokens,
+            cache_miss_tokens: result.cache_miss_tokens,
+        },
+        model,
+    );
     renderer.on_event(AgentEvent::Done {
         response: result.response.clone(),
         iterations: result.iterations,
@@ -885,6 +916,9 @@ fn emit_done<R: ReactRenderer>(renderer: &mut R, result: &AgentResult, hit_itera
         output_tokens: result.output_tokens,
         context_tokens: result.context_tokens,
         context_limit: result.context_limit,
+        cache_hit_tokens: result.cache_hit_tokens,
+        cache_miss_tokens: result.cache_miss_tokens,
+        cost,
         hit_iteration_cap,
     });
 }
