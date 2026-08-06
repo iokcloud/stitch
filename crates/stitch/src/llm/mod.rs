@@ -1,10 +1,14 @@
 //! LLM provider abstraction.
 //!
 //! Supports multiple LLM backends with a unified streaming interface.
-//! Currently implements OpenAI Chat Completions API with streaming.
+//! - OpenAI Chat Completions API（默认）
+//! - OpenAI Responses API（`responses` 子模块，官方 OpenAI + DeepSeek V4 Flash 自动路由）
 
+pub mod responses;
 pub mod stream;
 pub mod vision;
+
+pub use responses::{LlmProtocol, resolve_protocol};
 
 use crate::session::Message;
 
@@ -61,7 +65,7 @@ pub fn classify_network_error(e: &reqwest::Error) -> String {
 }
 
 /// 是否应重试（429 限流 + 5xx + 网络类；4xx 其余不重试）。
-fn is_retryable_status(status: u16) -> bool {
+pub(crate) fn is_retryable_status(status: u16) -> bool {
     status == 429 || (500..=599).contains(&status)
 }
 
@@ -156,7 +160,7 @@ use serde::{Deserialize, Serialize};
 /// up to 2 times.
 /// 共享 HTTP client（连接池/TLS 会话复用——ReAct 每迭代至少一次
 /// LLM 调用，逐次 Client::new() 会丢全部连接复用）。
-fn shared_http_client() -> &'static reqwest::Client {
+pub(crate) fn shared_http_client() -> &'static reqwest::Client {
     static CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
     CLIENT.get_or_init(|| {
         reqwest::Client::builder()
@@ -166,58 +170,42 @@ fn shared_http_client() -> &'static reqwest::Client {
     })
 }
 
-pub async fn stream_chat(
-    request: LlmRequest,
-    tx: tokio::sync::mpsc::UnboundedSender<StreamEvent>,
-) -> anyhow::Result<()> {
-    let url = format!(
-        "{}/chat/completions",
-        request.api_base.trim_end_matches('/')
-    );
-
-    let resolved_model =
-        crate::config::migrate_llm_model(&request.model).unwrap_or(request.model.as_str());
-    let thinking = deepseek_thinking_for(&request.api_base, &request.model);
-    let chat_req = ChatRequest {
-        model: resolved_model,
-        messages: &request.messages,
-        stream: true,
-        max_tokens: Some(request.max_tokens),
-        tools: request.tools.as_deref(),
-        thinking,
-    };
-
-    tracing::debug!(%url, model = %request.model, msg_count = request.messages.len(), "sending chat request");
-
-    // 重试策略：429 限流 + 5xx + 网络类错误最多重试 2 次；
-    // 429 尊重 Retry-After 头，其余按 1s/2s 退避。4xx 其余（密钥/模型等）
-    // 不重试——立即以用户可理解的中文报错。
+/// 发送 JSON POST 并重试（Chat / Responses 两协议共用）。
+/// 429 尊重 Retry-After 头，5xx/网络按 1s/2s 退避，最多 2 次；
+/// 其余 4xx 立即以用户可理解的中文报错（有 tx 时发 `StreamEvent::Error`）。
+pub(crate) async fn send_with_retry(
+    client: &reqwest::Client,
+    url: &str,
+    api_key: &str,
+    body: &serde_json::Value,
+    tx: Option<&tokio::sync::mpsc::UnboundedSender<StreamEvent>>,
+    timeout_secs: Option<u64>,
+) -> anyhow::Result<reqwest::Response> {
     let max_retries: u32 = 2;
-    let mut last_error = None;
-    let client = shared_http_client();
+    let mut last_error: Option<anyhow::Error> = None;
     for attempt in 0..=max_retries {
-        match client
-            .post(&url)
-            .header("Authorization", format!("Bearer {}", request.api_key))
+        let mut builder = client
+            .post(url)
+            .header("Authorization", format!("Bearer {api_key}"))
             .header("Content-Type", "application/json")
-            .json(&chat_req)
-            .send()
-            .await
-        {
+            .json(body);
+        if let Some(secs) = timeout_secs {
+            builder = builder.timeout(std::time::Duration::from_secs(secs));
+        }
+        match builder.send().await {
             Ok(response) => {
                 let status = response.status();
                 if !status.is_success() {
-                    // 429 尊重 Retry-After 头（秒），其余按 1s/2s 退避
                     let retry_after = response
                         .headers()
                         .get(reqwest::header::RETRY_AFTER)
                         .and_then(|v| v.to_str().ok())
                         .and_then(|s| s.trim().parse::<u64>().ok());
-                    let body = response.text().await.unwrap_or_default();
+                    let body_text = response.text().await.unwrap_or_default();
                     if is_retryable_status(status.as_u16()) {
                         last_error = Some(anyhow::anyhow!(
                             "{}",
-                            classify_api_error(status.as_u16(), &body)
+                            classify_api_error(status.as_u16(), &body_text)
                         ));
                         if attempt < max_retries {
                             let wait = retry_after
@@ -230,12 +218,13 @@ pub async fn stream_chat(
                         }
                         continue;
                     }
-                    let friendly = classify_api_error(status.as_u16(), &body);
-                    let _ = tx.send(StreamEvent::Error(friendly.clone()));
+                    let friendly = classify_api_error(status.as_u16(), &body_text);
+                    if let Some(tx) = tx {
+                        let _ = tx.send(StreamEvent::Error(friendly.clone()));
+                    }
                     anyhow::bail!("{friendly}");
                 }
-                // Success — proceed to stream processing
-                return process_sse_stream(response, tx).await;
+                return Ok(response);
             }
             Err(e) => {
                 if e.is_timeout() || e.is_connect() || e.is_request() {
@@ -250,25 +239,67 @@ pub async fn stream_chat(
                     continue;
                 }
                 let friendly = format!("请求异常：{e}");
-                let _ = tx.send(StreamEvent::Error(friendly.clone()));
+                if let Some(tx) = tx {
+                    let _ = tx.send(StreamEvent::Error(friendly.clone()));
+                }
                 anyhow::bail!("{friendly}");
             }
         }
     }
 
     let err = last_error.unwrap_or_else(|| anyhow::anyhow!("未知错误"));
-    let _ = tx.send(StreamEvent::Error(err.to_string()));
-    anyhow::bail!("{err:#}");
+    if let Some(tx) = tx {
+        let _ = tx.send(StreamEvent::Error(err.to_string()));
+    }
+    anyhow::bail!("{err:#}")
 }
 
-/// Non-streaming chat completion — used for context condensation (no tools).
-pub async fn complete_chat(request: LlmRequest) -> anyhow::Result<String> {
+pub async fn stream_chat(
+    request: LlmRequest,
+    tx: tokio::sync::mpsc::UnboundedSender<StreamEvent>,
+) -> anyhow::Result<()> {
+    let resolved_model =
+        crate::config::migrate_llm_model(&request.model).unwrap_or(request.model.as_str());
+    // 协议路由：官方 OpenAI + DeepSeek V4 Flash 走 Responses API
+    if resolve_protocol(&request.api_base, resolved_model) == LlmProtocol::Responses {
+        return responses::stream_responses(request, tx).await;
+    }
+
     let url = format!(
         "{}/chat/completions",
         request.api_base.trim_end_matches('/')
     );
+    let thinking = deepseek_thinking_for(&request.api_base, &request.model);
+    let chat_req = ChatRequest {
+        model: resolved_model,
+        messages: &request.messages,
+        stream: true,
+        max_tokens: Some(request.max_tokens),
+        tools: request.tools.as_deref(),
+        thinking,
+    };
+
+    tracing::debug!(%url, model = %request.model, msg_count = request.messages.len(), "sending chat request");
+
+    let body = serde_json::to_value(&chat_req)?;
+    let client = shared_http_client();
+    let response = send_with_retry(client, &url, &request.api_key, &body, Some(&tx), None).await?;
+    process_sse_stream(response, tx).await
+}
+
+/// Non-streaming chat completion — used for context condensation (no tools).
+pub async fn complete_chat(request: LlmRequest) -> anyhow::Result<String> {
     let resolved_model =
         crate::config::migrate_llm_model(&request.model).unwrap_or(request.model.as_str());
+    // 协议路由：官方 OpenAI + DeepSeek V4 Flash 走 Responses API
+    if resolve_protocol(&request.api_base, resolved_model) == LlmProtocol::Responses {
+        return responses::complete_responses(request).await;
+    }
+
+    let url = format!(
+        "{}/chat/completions",
+        request.api_base.trim_end_matches('/')
+    );
     let thinking = deepseek_thinking_for(&request.api_base, &request.model);
     let chat_req = ChatRequest {
         model: resolved_model,
@@ -279,57 +310,10 @@ pub async fn complete_chat(request: LlmRequest) -> anyhow::Result<String> {
         thinking,
     };
 
+    let body = serde_json::to_value(&chat_req)?;
     let client = shared_http_client();
-    // 与 stream_chat 同策略：429/5xx/网络重试 2 次，其余立即友好报错。
-    let max_retries: u32 = 2;
-    let mut last_error = None;
-    let mut response = None;
-    for attempt in 0..=max_retries {
-        if attempt > 0 {
-            tracing::warn!(attempt, "complete_chat retrying after transient error");
-            tokio::time::sleep(std::time::Duration::from_millis(1000 * attempt as u64)).await;
-        }
-        match client
-            .post(&url)
-            .header("Authorization", format!("Bearer {}", request.api_key))
-            .header("Content-Type", "application/json")
-            .timeout(std::time::Duration::from_secs(45))
-            .json(&chat_req)
-            .send()
-            .await
-        {
-            Ok(resp) => {
-                let status = resp.status();
-                if !status.is_success() {
-                    let body = resp.text().await.unwrap_or_default();
-                    if is_retryable_status(status.as_u16()) {
-                        last_error = Some(anyhow::anyhow!(
-                            "{}",
-                            classify_api_error(status.as_u16(), &body)
-                        ));
-                        continue;
-                    }
-                    anyhow::bail!("{}", classify_api_error(status.as_u16(), &body));
-                }
-                response = Some(resp);
-                break;
-            }
-            Err(e) => {
-                if e.is_timeout() || e.is_connect() || e.is_request() {
-                    last_error = Some(anyhow::anyhow!("{}", classify_network_error(&e)));
-                    continue;
-                }
-                anyhow::bail!("请求异常：{e}");
-            }
-        }
-    }
-    let response =
-        response.ok_or_else(|| last_error.unwrap_or_else(|| anyhow::anyhow!("未知错误")))?;
-    let status = response.status();
+    let response = send_with_retry(client, &url, &request.api_key, &body, None, Some(45)).await?;
     let body = response.text().await.unwrap_or_default();
-    if !status.is_success() {
-        anyhow::bail!("{}", classify_api_error(status.as_u16(), &body));
-    }
 
     let parsed: serde_json::Value = serde_json::from_str(&body)
         .map_err(|e| anyhow::anyhow!("invalid completion JSON: {e}; body={body}"))?;

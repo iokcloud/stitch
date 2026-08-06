@@ -287,6 +287,17 @@ async fn run_react_core<R: ReactRenderer>(
     // Pull archived context referenced by the latest user message back into hot.
     layers::promote_referenced_context(session);
 
+    // 长任务治理：旧工具结果 → 占位符（Anthropic clear_tool_uses 语义）。
+    // 先于压缩触发——清理可重取的大 payload 后 est 回落，可避免后续压缩；
+    // 只保留最近 KEEP_TOOL_RESULTS 条结果，assistant 的 tool_calls 记录保留。
+    let est_turn_start = tokens::estimate_messages(&session.messages);
+    if est_turn_start > soft_lim
+        && context::clear_old_tool_results(session, context::KEEP_TOOL_RESULTS)
+    {
+        // 清理改写历史——checkpoint 落盘，防崩溃只留内存清理态
+        renderer.flush_turn(session);
+    }
+
     for iteration in 0..max_iterations {
         // Check cancellation at start of each iteration
         if renderer.is_cancelled() {

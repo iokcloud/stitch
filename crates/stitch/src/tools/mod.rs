@@ -574,8 +574,12 @@ impl ToolRegistry {
         self.tools.insert(tool.name().to_string(), tool);
     }
 
+    /// 工具定义列表（按名称排序——前缀缓存友好：HashMap 随机种子会导致
+    /// 每次重建顺序漂移，使每轮首请求 tools 段必然 miss；排序后字节稳定）。
     pub fn definitions(&self) -> Vec<ToolDef> {
-        self.tools.values().map(|t| t.definition()).collect()
+        let mut defs: Vec<ToolDef> = self.tools.values().map(|t| t.definition()).collect();
+        defs.sort_by(|a, b| a.name.cmp(&b.name));
+        defs
     }
 
     pub fn get(&self, name: &str) -> Option<&Tool> {

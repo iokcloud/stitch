@@ -263,10 +263,16 @@ fn default_profile_label(provider: &str) -> String {
     }
 }
 
-/// Strip `/chat/completions` (and trailing slashes) so pasted full URLs become API roots.
+/// Strip `/chat/completions` / `/v1/responses` (and trailing slashes) so pasted
+/// full URLs become API roots.
 pub fn normalize_openai_compatible_base(raw: &str) -> String {
     let mut s = raw.trim().trim_end_matches('/').to_string();
-    for suffix in ["/chat/completions", "/completions"] {
+    for suffix in [
+        "/chat/completions",
+        "/completions",
+        "/v1/responses",
+        "/responses",
+    ] {
         if s.to_ascii_lowercase().ends_with(suffix) {
             s.truncate(s.len() - suffix.len());
             s = s.trim_end_matches('/').to_string();

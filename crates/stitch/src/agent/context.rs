@@ -399,6 +399,56 @@ fn apply_compact(session: &mut Session, keep_start: usize, summary: &str) {
     }
 }
 
+/// 被清理工具结果的占位符（字节稳定——同一位置每次请求内容一致）。
+pub const CLEARED_TOOL_RESULT_STUB: &str = "[工具结果已清理——如需可重新调用工具获取]";
+
+/// 工具结果清理保留的最近条数（官方 clear_tool_uses 默认 keep=3；
+/// Stitch 迭代频繁，放宽到 6 避免模型丢失过多近态）。
+pub const KEEP_TOOL_RESULTS: usize = 6;
+
+/// 清理旧工具结果（Anthropic clear_tool_uses 语义的窗口内实现 ·
+/// docs/LONG-HORIZON-CONTEXT-PLAN.md 长任务治理第一项）。
+///
+/// 把「早于最近 `keep_recent` 条」的 tool 结果消息替换为占位符，
+/// **保留 assistant 的 tool_calls 记录**（模型仍知道调用过、可重新调用取回）。
+/// 与硬压缩的区别：不删上下文、不丢因果结构，只削减可重取的 payload。
+///
+/// 调用时机：turn 开头（send 前）一次性执行；turn 内迭代间不动，
+/// 保持迭代间前缀稳定（缓存友好）。
+///
+/// 缓存代价：清理后下一轮前缀变化（一次 miss），但省去此后每轮重复发送
+/// 大 payload 的成本——净收益为正（DeepSeek 重新缓存 << 大结果重复传输）。
+///
+/// 返回是否发生了清理（调用方据此 flush checkpoint 落盘）。
+pub fn clear_old_tool_results(session: &mut Session, keep_recent: usize) -> bool {
+    if keep_recent == 0 {
+        return false;
+    }
+    // 从尾部定位「第 keep_recent+1 条」tool 结果（更早的全部可清理）
+    let mut recent_seen = 0usize;
+    let mut cut: Option<usize> = None;
+    for (i, m) in session.messages.iter().enumerate().rev() {
+        if m.role == Role::Tool {
+            recent_seen += 1;
+            if recent_seen > keep_recent {
+                cut = Some(i);
+                break;
+            }
+        }
+    }
+    let Some(cut) = cut else {
+        return false;
+    };
+    let mut cleared = false;
+    for m in session.messages[1..=cut].iter_mut() {
+        if m.role == Role::Tool && m.content.text() != CLEARED_TOOL_RESULT_STUB {
+            m.content = CLEARED_TOOL_RESULT_STUB.to_string().into();
+            cleared = true;
+        }
+    }
+    cleared
+}
+
 /// Summary text embedded in the condensed user message (if present).
 pub fn condensed_summary_text(session: &Session) -> Option<&str> {
     session.messages.iter().find_map(|m| {
@@ -505,6 +555,68 @@ mod tests {
                 arguments: "{}".into(),
             },
         }
+    }
+
+    #[test]
+    fn clear_old_tool_results_keeps_recent_and_stubs_early() {
+        // 历史：assistant(tool_calls) + tool(结果) × 4 → 保留最近 2 条，前 2 条占位
+        let mut session = Session::new("sys");
+        for i in 0..4 {
+            let mut asst = make_msg(Role::Assistant, "");
+            asst.tool_calls = Some(vec![tool_call(&format!("call_{i}"), "read_file")]);
+            session.messages.push(asst);
+            session
+                .messages
+                .push(make_msg(Role::Tool, &format!("文件内容第 {i} 份（很大）")));
+        }
+        // 清理前：4 条 tool 结果都在
+        assert!(session.messages.iter().any(|m| m.role == Role::Tool));
+
+        let cleared = clear_old_tool_results(&mut session, 2);
+        assert!(cleared, "应发生清理");
+
+        let tool_msgs: Vec<&str> = session
+            .messages
+            .iter()
+            .filter(|m| m.role == Role::Tool)
+            .map(|m| m.content.text())
+            .collect();
+        assert_eq!(
+            tool_msgs.len(),
+            4,
+            "tool 消息条数不变（占位符替换而非删除）"
+        );
+        assert_eq!(tool_msgs[0], CLEARED_TOOL_RESULT_STUB);
+        assert_eq!(tool_msgs[1], CLEARED_TOOL_RESULT_STUB);
+        assert_eq!(tool_msgs[2], "文件内容第 2 份（很大）", "最近 2 条保留");
+        assert_eq!(tool_msgs[3], "文件内容第 3 份（很大）");
+        // assistant 的 tool_calls 记录完整保留
+        assert!(
+            session
+                .messages
+                .iter()
+                .filter(|m| m.role == Role::Assistant)
+                .all(|m| m.tool_calls.is_some())
+        );
+    }
+
+    #[test]
+    fn clear_old_tool_results_noop_when_within_keep() {
+        let mut session = Session::new("sys");
+        for i in 0..3 {
+            let mut asst = make_msg(Role::Assistant, "");
+            asst.tool_calls = Some(vec![tool_call(&format!("call_{i}"), "read_file")]);
+            session.messages.push(asst);
+            session.messages.push(make_msg(Role::Tool, "结果"));
+        }
+        assert!(!clear_old_tool_results(&mut session, 6), "少于 keep 不清理");
+        assert!(
+            session
+                .messages
+                .iter()
+                .filter(|m| m.role == Role::Tool)
+                .all(|m| m.content.text() == "结果")
+        );
     }
 
     #[test]

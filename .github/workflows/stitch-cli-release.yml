@@ -1,0 +1,73 @@
+name: stitch-cli-release
+
+# Stitch CLI 单二进制发布（种子验证通道 · docs/LONG-HORIZON-CONTEXT-PLAN.md）
+# 四产物：Windows x64 / macOS Intel / macOS Apple Silicon / Linux musl（静态）
+# 触发：手动 + 推送 v* tag（tag 时 draft Release + 传资产；手动时进 artifact）
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+jobs:
+  build-cli:
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: "windows-latest"
+            artifact: "stitch-x86_64-pc-windows-msvc.exe"
+          - os: "macos-latest"
+            target: "x86_64-apple-darwin"
+            artifact: "stitch-x86_64-apple-darwin"
+          - os: "macos-latest"
+            target: "aarch64-apple-darwin"
+            artifact: "stitch-aarch64-apple-darwin"
+          - os: "ubuntu-22.04"
+            target: "x86_64-unknown-linux-musl"
+            artifact: "stitch-x86_64-unknown-linux-musl"
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target || '' }}
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "crates/stitch -> target"
+
+      - name: install musl linker (linux only)
+        if: matrix.target == 'x86_64-unknown-linux-musl'
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: build cli
+        shell: bash
+        run: |
+          if [ -n "${{ matrix.target }}" ]; then
+            cargo build --release -p stitch --target ${{ matrix.target }}
+            cp target/${{ matrix.target }}/release/stitch ${{ matrix.artifact }}
+          else
+            cargo build --release -p stitch
+            cp target/release/stitch.exe ${{ matrix.artifact }}
+          fi
+          chmod +x ${{ matrix.artifact }}
+
+      - name: sha256 checksum
+        run: sha256sum ${{ matrix.artifact }} > ${{ matrix.artifact }}.sha256
+
+      - uses: softprops/action-gh-release@v2
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+        with:
+          files: |
+            stitch-*
+          draft: true
+
+      - uses: actions/upload-artifact@v4
+        if: github.event_name != 'push'
+        with:
+          name: cli-${{ matrix.os }}-${{ matrix.target || 'native' }}
+          path: stitch-*
+          if-no-files-found: error

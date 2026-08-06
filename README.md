@@ -33,7 +33,18 @@
 
 macOS 首次打开若被拦截，右键图标 →「打开」一次即可；AppImage 先 `chmod +x` 再运行。
 
-### 方式二：一键构建（无安装包体验）
+### 方式二：命令行版（CLI）
+
+不装桌面版也能用核心 Agent（会话 · 工具 · 多模型）。从 [GitHub Releases](https://github.com/iokcloud/stitch/releases) 下载对应平台二进制（`stitch-*`，附 `.sha256` 校验和）：
+
+```bash
+./stitch run "你的任务"          # 首次运行按提示配置模型密钥（或 export STITCH_LLM_API_KEY=sk-...）
+./stitch run -y "改好并跑通测试"  # -y 跳过确认
+```
+
+Windows：`stitch-x86_64-pc-windows-msvc.exe` · macOS：`stitch-aarch64-apple-darwin`（M 系）/ `stitch-x86_64-apple-darwin`（Intel）· Linux：`stitch-x86_64-unknown-linux-musl`（静态）。
+
+### 方式三：一键构建（无安装包体验）
 
 PowerShell 执行：
 
