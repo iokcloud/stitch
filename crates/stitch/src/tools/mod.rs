@@ -17,6 +17,7 @@ pub mod file;
 pub mod find_path;
 pub mod git;
 pub mod list_dir;
+pub mod memory;
 pub mod paths;
 pub mod process_win;
 pub mod save_skill;
@@ -119,6 +120,7 @@ pub enum Tool {
     DesktopBrowser(desktop::DesktopBrowser),
     DesktopAppLaunch(desktop::DesktopAppLaunch),
     SaveSkill(save_skill::SaveSkill),
+    SaveMemory(memory::SaveMemory),
     McpRemote(McpRemoteTool),
 }
 
@@ -151,6 +153,7 @@ impl Tool {
             Self::DesktopBrowser(t) => t.definition(),
             Self::DesktopAppLaunch(t) => t.definition(),
             Self::SaveSkill(t) => t.definition(),
+            Self::SaveMemory(t) => t.definition(),
             Self::McpRemote(t) => ToolDef {
                 name: t.qualified_name.clone(),
                 description: if t.description.is_empty() {
@@ -209,6 +212,7 @@ impl Tool {
             Self::DesktopBrowser(t) => t.execute(arguments).await,
             Self::DesktopAppLaunch(t) => t.execute(arguments).await,
             Self::SaveSkill(t) => t.execute(arguments).await,
+            Self::SaveMemory(t) => t.execute(arguments).await,
             Self::McpRemote(t) => match t.runtime.execute(arguments).await {
                 Ok(output) => Ok(ToolResult {
                     metrics: None,
@@ -248,6 +252,7 @@ impl Tool {
             Self::DesktopBrowser(_) => "desktop_browser",
             Self::DesktopAppLaunch(_) => "desktop_app_launch",
             Self::SaveSkill(_) => "save_skill",
+            Self::SaveMemory(_) => "save_memory",
             Self::McpRemote(t) => t.qualified_name.as_str(),
         }
     }
@@ -653,5 +658,6 @@ pub fn build_registry(work_dir: &str) -> ToolRegistry {
     registry.register(Tool::DesktopBrowser(desktop::DesktopBrowser));
     registry.register(Tool::DesktopAppLaunch(desktop::DesktopAppLaunch));
     registry.register(Tool::SaveSkill(save_skill::SaveSkill::new(work_dir)));
+    registry.register(Tool::SaveMemory(memory::SaveMemory::new(work_dir)));
     registry
 }

@@ -108,6 +108,18 @@ pub fn build_system_prompt_with_context(
         prompt.push('\n');
     }
 
+    // ── Workspace memory（模型自主写入，跨会话加载）──────────────────
+    let memory = crate::tools::memory::load_memory(_work_dir);
+    if !memory.trim().is_empty() {
+        prompt.push_str("## Workspace Memory\n\n");
+        prompt.push_str(
+            "Notes saved by previous sessions in this workspace. Read them; \
+             update them with save_memory when you learn something reusable:\n\n",
+        );
+        prompt.push_str(memory.trim());
+        prompt.push_str("\n\n");
+    }
+
     prompt.push('\n');
 
     // ── Available Tools ──────────────────────────────────────────────
