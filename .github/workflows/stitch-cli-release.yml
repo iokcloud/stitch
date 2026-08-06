@@ -2,11 +2,11 @@ name: stitch-cli-release
 
 # Stitch CLI 单二进制发布（种子验证通道 · docs/LONG-HORIZON-CONTEXT-PLAN.md）
 # 四产物：Windows x64 / macOS Intel / macOS Apple Silicon / Linux musl（静态）
-# 触发：手动 + 推送 v* tag（tag 时 draft Release + 传资产；手动时进 artifact）
+# 触发：仅手动（curl API workflow_dispatch，与桌面 mac/linux 出包同先例）。
+# 注意：v* tag 留给桌面 build.yml（tauri），CLI 不再用 tag 触发。
+# 产物进 artifact，由发布脚本下载并传 draft Release。
 on:
   workflow_dispatch:
-  push:
-    tags: ["v*"]
 
 jobs:
   build-cli:
@@ -58,15 +58,7 @@ jobs:
       - name: sha256 checksum
         run: sha256sum ${{ matrix.artifact }} > ${{ matrix.artifact }}.sha256
 
-      - uses: softprops/action-gh-release@v2
-        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
-        with:
-          files: |
-            stitch-*
-          draft: true
-
       - uses: actions/upload-artifact@v4
-        if: github.event_name != 'push'
         with:
           name: cli-${{ matrix.os }}-${{ matrix.target || 'native' }}
           path: stitch-*
