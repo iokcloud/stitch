@@ -23,10 +23,35 @@ pub enum StreamEvent {
         name: String,
         arguments: String,
     },
+    /// 服务端真实 usage（流末尾 usage chunk / Responses completed 事件）。
+    /// 字段缺失时用 0——调用方应回退到本地估算。
+    Usage {
+        input_tokens: u64,
+        output_tokens: u64,
+        /// 缓存命中的输入 token（DeepSeek prompt_cache_hit_tokens / OpenAI cached_tokens）。
+        cache_hit_tokens: u64,
+        cache_miss_tokens: u64,
+    },
     /// The model has finished its response.
     Done,
     /// An error occurred during streaming.
     Error(String),
+}
+
+/// 解析流末尾 usage chunk（OpenAI / DeepSeek chat 流式：`choices` 空 + `usage`）。
+/// 返回 `None` 表示该 chunk 无 usage（普通增量或格式不符）。
+fn parse_stream_usage(chunk: &ChatStreamChunk) -> Option<StreamEvent> {
+    let usage = chunk.usage.as_ref()?;
+    let input = usage.prompt_tokens.unwrap_or(0);
+    let output = usage.completion_tokens.unwrap_or(0);
+    let cache_hit = usage.prompt_cache_hit_tokens.unwrap_or(0);
+    let cache_miss = usage.prompt_cache_miss_tokens.unwrap_or(0);
+    Some(StreamEvent::Usage {
+        input_tokens: input,
+        output_tokens: output,
+        cache_hit_tokens: cache_hit,
+        cache_miss_tokens: cache_miss,
+    })
 }
 
 /// API 错误 → 用户可理解的中文说明（替代原始 status+body）。
@@ -116,7 +141,24 @@ fn deepseek_thinking_for(api_base: &str, model: &str) -> Option<ThinkingMode> {
 
 #[derive(Deserialize)]
 struct ChatStreamChunk {
+    #[serde(default)]
     choices: Vec<ChoiceDelta>,
+    /// 流末尾 usage（DeepSeek: prompt_cache_hit_tokens / prompt_cache_miss_tokens）。
+    #[serde(default)]
+    usage: Option<StreamUsage>,
+}
+
+#[derive(Deserialize)]
+struct StreamUsage {
+    #[serde(default)]
+    prompt_tokens: Option<u64>,
+    #[serde(default)]
+    completion_tokens: Option<u64>,
+    /// DeepSeek 缓存字段（OpenAI 是 prompt_tokens_details.cached_tokens，见下）。
+    #[serde(default)]
+    prompt_cache_hit_tokens: Option<u64>,
+    #[serde(default)]
+    prompt_cache_miss_tokens: Option<u64>,
 }
 
 #[derive(Deserialize)]
@@ -376,6 +418,10 @@ async fn process_sse_stream(
 
             match serde_json::from_str::<ChatStreamChunk>(data) {
                 Ok(chunk) => {
+                    // 流末尾 usage chunk（choices 通常为空）——成本/缓存统计用
+                    if let Some(usage_ev) = parse_stream_usage(&chunk) {
+                        let _ = tx.send(usage_ev);
+                    }
                     for choice in chunk.choices {
                         let delta = choice.delta;
 
@@ -432,6 +478,9 @@ async fn process_sse_stream(
             && data != "[DONE]"
             && let Ok(chunk) = serde_json::from_str::<ChatStreamChunk>(data)
         {
+            if let Some(usage_ev) = parse_stream_usage(&chunk) {
+                let _ = tx.send(usage_ev);
+            }
             for choice in chunk.choices {
                 if let Some(content) = choice.delta.content
                     && !content.is_empty()

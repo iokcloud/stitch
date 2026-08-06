@@ -32,6 +32,10 @@ pub struct AgentResult {
     pub output_tokens: usize,
     pub context_tokens: usize,
     pub context_limit: usize,
+    /// 服务端真实缓存命中输入 token（无则 0）。
+    pub cache_hit_tokens: u64,
+    /// 服务端真实缓存未命中输入 token。
+    pub cache_miss_tokens: u64,
 }
 
 /// Events emitted during agent execution for streaming UIs.
@@ -389,7 +393,7 @@ async fn run_react_core<R: ReactRenderer>(
             );
         }
 
-        let response = collect_stream_events(&mut rx, renderer, &NEVER_CANCEL).await;
+        let response = collect_stream_events(&mut rx, renderer, &NEVER_CANCEL, &mut usage).await;
         llm_handle.await?;
 
         match classify_response(response, &native_tool_defs) {
@@ -520,7 +524,7 @@ async fn run_react_core<R: ReactRenderer>(
         let _ = llm::stream_chat(request, tx).await;
     });
 
-    let response = collect_stream_events(&mut rx, renderer, &NEVER_CANCEL).await;
+    let response = collect_stream_events(&mut rx, renderer, &NEVER_CANCEL, &mut usage).await;
     let result = match classify_response(response, &native_tool_defs) {
         ResponseType::ApiError(msg) => anyhow::bail!("{msg}"),
         ResponseType::TextOnly(text) | ResponseType::ToolCalls { text, .. } => {
@@ -832,6 +836,8 @@ fn make_result(
         output_tokens: usage.output_tokens,
         context_tokens,
         context_limit,
+        cache_hit_tokens: usage.cache_hit_tokens,
+        cache_miss_tokens: usage.cache_miss_tokens,
     }
 }
 
@@ -887,6 +893,7 @@ async fn collect_stream_events<R: ReactRenderer>(
     rx: &mut tokio::sync::mpsc::UnboundedReceiver<StreamEvent>,
     renderer: &mut R,
     cancel_flag: &std::sync::atomic::AtomicBool,
+    usage: &mut tokens::TokenUsage,
 ) -> RawResponse {
     use std::sync::atomic::Ordering;
     let mut text = String::new();
@@ -911,6 +918,16 @@ async fn collect_stream_events<R: ReactRenderer>(
                             name,
                             arguments,
                         });
+                    }
+                    Some(StreamEvent::Usage {
+                        cache_hit_tokens,
+                        cache_miss_tokens,
+                        ..
+                    }) => {
+                        // 真实 usage 只更新缓存统计（输入/输出仍用本地估算，
+                        // 与 compaction 阈值/历史展示保持一致）
+                        usage.cache_hit_tokens += cache_hit_tokens;
+                        usage.cache_miss_tokens += cache_miss_tokens;
                     }
                     Some(StreamEvent::Done) => break,
                     Some(StreamEvent::Error(msg)) => {

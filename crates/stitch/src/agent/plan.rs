@@ -495,6 +495,7 @@ pub async fn generate_plan(
         match event {
             StreamEvent::Token(t) => text.push_str(&t),
             StreamEvent::ToolCall { .. } => {}
+            StreamEvent::Usage { .. } => {} // plan 生成不计成本
             StreamEvent::Done => break,
             StreamEvent::Error(e) => {
                 tracing::warn!(%e, "plan generation LLM error");

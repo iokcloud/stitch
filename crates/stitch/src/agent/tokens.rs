@@ -13,12 +13,58 @@ pub struct TokenUsage {
     pub input_tokens: usize,
     /// Estimated output tokens received from the model.
     pub output_tokens: usize,
+    /// 服务端真实缓存命中输入 token（API usage；无则 0，展示时回退估算）。
+    pub cache_hit_tokens: u64,
+    /// 服务端真实缓存未命中输入 token（API usage）。
+    pub cache_miss_tokens: u64,
 }
 
 impl TokenUsage {
     pub fn total(&self) -> usize {
         self.input_tokens + self.output_tokens
     }
+
+    /// 缓存命中率（0-100；无真实 usage 时返回 None）。
+    pub fn cache_hit_pct(&self) -> Option<u8> {
+        let total = self.cache_hit_tokens + self.cache_miss_tokens;
+        if total == 0 {
+            return None;
+        }
+        Some(((self.cache_hit_tokens.saturating_mul(100)) / total).min(100) as u8)
+    }
+}
+
+/// 每百万 token 价格（元/百万）：(输入命中, 输入未命中, 输出)。
+/// 近似表——官方价格变化后此处维护；未知模型用通用默认。
+fn price_per_million(model: &str) -> (f64, f64, f64) {
+    let m = model.to_ascii_lowercase();
+    if m.contains("deepseek") {
+        // DeepSeek V4 系：缓存命中约 0.1 折（官方 2.5 折优惠期后近似）
+        (0.05, 0.5, 2.0)
+    } else if m.contains("gpt-5") || m.contains("o3") || m.contains("o4") {
+        // OpenAI 前沿系：输入 $1.25/M ≈ ¥9，缓存 $0.125/M ≈ ¥0.9，输出 $10/M ≈ ¥72
+        (0.9, 9.0, 72.0)
+    } else if m.contains("gpt-4") {
+        (0.72, 7.2, 21.6)
+    } else {
+        // 通用默认（近似 ¥2/M 输入 · ¥12/M 输出 · 命中 0.1 折）
+        (0.2, 2.0, 12.0)
+    }
+}
+
+/// 回合成本估算（人民币，元）。基于真实 usage（缓存命中/未命中分开计价）；
+/// 无真实 usage 时按估算 token 全量未命中计价。
+pub fn estimate_cost(usage: &TokenUsage, model: &str) -> f64 {
+    let (hit_price, miss_price, out_price) = price_per_million(model);
+    let (hit, miss) = if usage.cache_hit_tokens + usage.cache_miss_tokens > 0 {
+        (
+            usage.cache_hit_tokens as f64,
+            usage.cache_miss_tokens as f64,
+        )
+    } else {
+        (0.0, usage.input_tokens as f64)
+    };
+    (hit * hit_price + miss * miss_price + usage.output_tokens as f64 * out_price) / 1_000_000.0
 }
 
 /// Snapshot for UI: turn totals + live context fill.
@@ -215,8 +261,32 @@ mod tests {
         let usage = TokenUsage {
             input_tokens: 1000,
             output_tokens: 500,
+            ..Default::default()
         };
         assert_eq!(usage.total(), 1500);
+    }
+
+    #[test]
+    fn cache_hit_pct_and_cost() {
+        let mut usage = TokenUsage {
+            input_tokens: 10_000,
+            output_tokens: 500,
+            ..Default::default()
+        };
+        // 无真实 usage → None，成本按全量未命中估算
+        assert_eq!(usage.cache_hit_pct(), None);
+        let no_cache = estimate_cost(&usage, "deepseek-v4-flash");
+        assert!(no_cache > 0.0);
+
+        // 有真实 usage：8 成命中
+        usage.cache_hit_tokens = 8_000;
+        usage.cache_miss_tokens = 2_000;
+        assert_eq!(usage.cache_hit_pct(), Some(80));
+        let cached = estimate_cost(&usage, "deepseek-v4-flash");
+        assert!(
+            cached < no_cache,
+            "缓存命中应显著降低成本（{cached} vs {no_cache}）"
+        );
     }
 
     #[test]

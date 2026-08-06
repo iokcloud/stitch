@@ -198,6 +198,30 @@ struct ResponsesEvent {
     output: Option<ResponsesOutputItem>,
     #[serde(default)]
     item: Option<ResponsesOutputItem>,
+    /// completed 事件的完整 response（usage 在 response.usage）。
+    #[serde(default)]
+    response: Option<serde_json::Value>,
+}
+
+/// 从 `response.completed` 的 response 对象解析 usage（OpenAI 格式：
+/// input_tokens / output_tokens / input_tokens_details.cached_tokens）。
+fn usage_from_completed(response: &serde_json::Value) -> Option<StreamEvent> {
+    let usage = response.get("usage")?;
+    let input = usage.get("input_tokens")?.as_u64().unwrap_or(0);
+    let output = usage
+        .get("output_tokens")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let cached = usage
+        .pointer("/input_tokens_details/cached_tokens")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    Some(StreamEvent::Usage {
+        input_tokens: input,
+        output_tokens: output,
+        cache_hit_tokens: cached,
+        cache_miss_tokens: input.saturating_sub(cached),
+    })
 }
 
 #[derive(Deserialize)]
@@ -305,7 +329,15 @@ fn handle_responses_event(
             });
             None
         }
-        EV_COMPLETED => Some(()),
+        EV_COMPLETED => {
+            // 成本/缓存统计：completed 事件携带 usage（有则发 Usage，无则正常收尾）
+            if let Some(resp) = &ev.response
+                && let Some(usage_ev) = usage_from_completed(resp)
+            {
+                let _ = tx.send(usage_ev);
+            }
+            Some(())
+        }
         EV_FAILED => {
             let _ = tx.send(StreamEvent::Error(
                 "模型服务流式响应失败（response.failed）。".to_string(),
