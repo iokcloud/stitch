@@ -1,4 +1,5 @@
 #![allow(dead_code)]
+#![allow(clippy::disallowed_methods)] // json! 宏展开内含 unwrap（项目惯例）
 
 // Allow dead_code — many types are consumed only by stitch-desktop or external callers.
 mod agent;
@@ -10,11 +11,13 @@ mod llm;
 mod mcp;
 mod mcp_protocol;
 mod render;
+mod repl;
 mod session;
 mod tools;
 
 use clap::Parser;
 use cli::{Cli, Command, ConfigAction};
+use std::sync::Arc;
 use tracing_subscriber::EnvFilter;
 
 fn main() -> anyhow::Result<()> {
@@ -24,6 +27,8 @@ fn main() -> anyhow::Result<()> {
         )
         .with_target(false)
         .without_time()
+        // 日志走 stderr——stdout 留给程序输出（--json 等机器可读模式不被污染）
+        .with_writer(std::io::stderr)
         .init();
 
     let cli = Cli::parse();
@@ -34,7 +39,33 @@ fn main() -> anyhow::Result<()> {
 
 async fn run_command(cli: Cli) -> anyhow::Result<()> {
     match cli.command {
-        Command::Run { prompt, model, yes } => cmd_run(prompt, model, yes).await,
+        Command::Run {
+            prompt,
+            model,
+            yes,
+            json,
+        } => cmd_run(prompt, model, yes, json).await,
+        Command::Chat { resume, continue_ } => {
+            let cfg = config::StitchConfig::load()?;
+            repl::run_chat(cfg, resume, continue_).await
+        }
+        Command::Sessions => {
+            let work_dir = std::env::current_dir()
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|_| ".".into());
+            let sessions = repl::list_sessions(&work_dir);
+            if sessions.is_empty() {
+                println!("本工作区暂无保存的会话（运行 stitch chat 开始一个）");
+            } else {
+                for s in sessions {
+                    println!(
+                        "{}\t{}\t{} 条\t{}",
+                        s.id, s.updated_at, s.msg_count, s.title
+                    );
+                }
+            }
+            Ok(())
+        }
         Command::Suite { slug } => cmd_suite(slug).await,
         Command::Agent { slug } => cmd_agent(slug).await,
         Command::Login => cmd_login().await,
@@ -191,6 +222,7 @@ async fn cmd_run(
     prompt: Vec<String>,
     model_override: Option<String>,
     skip_confirm: bool,
+    json: bool,
 ) -> anyhow::Result<()> {
     let prompt = prompt.join(" ");
     if prompt.is_empty() {
@@ -210,23 +242,87 @@ async fn cmd_run(
     let mut session = session::Session::new(system_prompt);
     session.add_user_message(&prompt);
 
-    eprintln!("---- stitch ({model}) ----");
+    if !json {
+        eprintln!("---- stitch ({model}) ----");
+    }
 
     let allow_rules = allow::AllowRules::load();
-    let result = agent::run_react(
-        &mut session,
-        &cfg.llm_api_base,
+    let result = if json {
+        // 机器可读模式：静默渲染器（无终端输出），stdout 只出 JSON
+        let confirm_pending = Arc::new(std::sync::Mutex::new(std::collections::HashMap::<
+            String,
+            tokio::sync::oneshot::Sender<bool>,
+        >::new()));
+        let allow_rules_arc = Arc::new(std::sync::Mutex::new(allow_rules.clone()));
+        // 事件通道无人消费 → 渲染静默（stdout 只出 JSON）
+        agent::run_react_streaming(
+            &mut session,
+            &cfg.llm_api_base,
+            model,
+            api_key,
+            &tools,
+            cfg.max_iterations,
+            confirm_pending,
+            Some(&work_dir),
+            allow_rules_arc,
+            &tokio::sync::mpsc::unbounded_channel::<agent::AgentEvent>().0,
+            &std::sync::atomic::AtomicBool::new(false),
+            None,
+        )
+        .await?
+    } else {
+        agent::run_react(
+            &mut session,
+            &cfg.llm_api_base,
+            model,
+            api_key,
+            &tools,
+            cfg.max_iterations,
+            skip_confirm,
+            Some(&work_dir),
+            Some(&allow_rules),
+        )
+        .await?
+    };
+
+    // 成本仪表盘：回合成本 + 缓存命中率（Reasonix 式省钱可见；真实 usage 缺失时按估算）
+    let cost = agent::tokens::estimate_cost(
+        &agent::tokens::TokenUsage {
+            input_tokens: result.input_tokens,
+            output_tokens: result.output_tokens,
+            cache_hit_tokens: result.cache_hit_tokens,
+            cache_miss_tokens: result.cache_miss_tokens,
+        },
         model,
-        api_key,
-        &tools,
-        cfg.max_iterations,
-        skip_confirm,
-        Some(&work_dir),
-        Some(&allow_rules),
-    )
-    .await?;
+    );
+
+    if json {
+        // 机器可读输出（--json）：stdout 只输出 JSON
+        let out = serde_json::json!({
+            "response": result.response,
+            "iterations": result.iterations,
+            "input_tokens": result.input_tokens,
+            "output_tokens": result.output_tokens,
+            "cache_hit_tokens": result.cache_hit_tokens,
+            "cache_miss_tokens": result.cache_miss_tokens,
+            "cost": cost,
+        });
+        println!("{}", serde_json::to_string_pretty(&out)?);
+        return Ok(());
+    }
 
     eprintln!("---- done ({} iterations) ----", result.iterations);
+    let hit_total = result.cache_hit_tokens + result.cache_miss_tokens;
+    let hit_pct = result
+        .cache_hit_tokens
+        .saturating_mul(100)
+        .checked_div(hit_total)
+        .map(|pct| format!("{pct}%"))
+        .unwrap_or_else(|| "—".to_string());
+    eprintln!(
+        "---- 成本 ¥{:.4} · 缓存命中 {} · 输入 {} tokens / 输出 {} tokens ----",
+        cost, hit_pct, result.input_tokens, result.output_tokens,
+    );
     Ok(())
 }
 

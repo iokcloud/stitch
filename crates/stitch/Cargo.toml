@@ -40,6 +40,8 @@ pulldown-cmark = { version = "0.12", default-features = false, features = ["html
 
 # Interactive prompts
 dialoguer = "0.11"
+rustyline = "15"
+ctrlc = "3.4"
 
 # SSE streaming
 eventsource-stream = "0.2"
