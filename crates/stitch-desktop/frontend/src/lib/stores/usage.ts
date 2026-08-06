@@ -10,6 +10,12 @@ export type UsageState = {
   /** ReAct loop count for the in-flight or last finished turn. */
   iterations: number;
   compacted: boolean;
+  /** Server-reported cache-hit input tokens (0 when absent). */
+  cacheHitTokens: number;
+  /** Server-reported cache-miss input tokens. */
+  cacheMissTokens: number;
+  /** Estimated turn cost in CNY (computed in Rust; 0 when absent). */
+  cost: number;
   /** Cumulative tokens across turns in this app session (not persisted). */
   sessionTotal: number;
   /** How many agent turns finished this app session. */
@@ -25,6 +31,9 @@ const empty: UsageState = {
   contextLimit: 64_000,
   iterations: 0,
   compacted: false,
+  cacheHitTokens: 0,
+  cacheMissTokens: 0,
+  cost: 0,
   sessionTotal: 0,
   turnCount: 0,
   layers: null,
@@ -44,6 +53,8 @@ export function applyUsageEvent(ev: {
   context_limit?: number;
   iteration?: number;
   compacted?: boolean;
+  cache_hit_tokens?: number;
+  cache_miss_tokens?: number;
   layers?: LayerStats | null;
 }) {
   usage.update((u) => ({
@@ -54,6 +65,8 @@ export function applyUsageEvent(ev: {
     contextLimit: ev.context_limit || u.contextLimit || 64_000,
     iterations: ev.iteration ?? u.iterations,
     compacted: !!ev.compacted,
+    cacheHitTokens: ev.cache_hit_tokens ?? u.cacheHitTokens,
+    cacheMissTokens: ev.cache_miss_tokens ?? u.cacheMissTokens,
     layers: ev.layers !== undefined ? ev.layers : u.layers,
   }));
 }
@@ -64,6 +77,9 @@ export function applyDoneUsage(ev: {
   context_tokens?: number;
   context_limit?: number;
   iterations?: number;
+  cache_hit_tokens?: number;
+  cache_miss_tokens?: number;
+  cost?: number;
 }) {
   const inTok = ev.input_tokens ?? 0;
   const outTok = ev.output_tokens ?? 0;
@@ -75,9 +91,12 @@ export function applyDoneUsage(ev: {
     contextLimit: ev.context_limit || u.contextLimit || 64_000,
     iterations: ev.iterations ?? u.iterations,
     compacted: u.compacted,
-    layers: u.layers,
+    cacheHitTokens: ev.cache_hit_tokens ?? u.cacheHitTokens,
+    cacheMissTokens: ev.cache_miss_tokens ?? u.cacheMissTokens,
+    cost: ev.cost ?? u.cost,
     sessionTotal: u.sessionTotal + turn,
     turnCount: u.turnCount + 1,
+    layers: u.layers,
   }));
 }
 
@@ -101,5 +120,8 @@ export function formatTokenCount(n: number): string {
 
 export function usageHint(): string {
   const u = get(usage);
-  return `Context ${formatTokenCount(u.contextTokens)}/${formatTokenCount(u.contextLimit)}`;
+  const hitTotal = u.cacheHitTokens + u.cacheMissTokens;
+  const hitPct = hitTotal > 0 ? `${Math.round((u.cacheHitTokens * 100) / hitTotal)}%` : "—";
+  const costText = u.cost > 0 ? ` · 成本 ¥${u.cost.toFixed(4)}` : "";
+  return `Context ${formatTokenCount(u.contextTokens)}/${formatTokenCount(u.contextLimit)} · 缓存命中 ${hitPct}${costText}`;
 }

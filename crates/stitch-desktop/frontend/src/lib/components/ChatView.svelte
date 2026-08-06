@@ -578,6 +578,16 @@ const PLAN_MODE_LABELS: Record<string, string> = {
     };
   });
 
+  /** 成本仪表盘：usage-meter title 显示缓存命中率 + 回合成本（Reasonix 式省钱可见）。 */
+  const usageTitle = $derived.by(() => {
+    if (layerData) return layerData.title;
+    const hitTotal = $usage.cacheHitTokens + $usage.cacheMissTokens;
+    const hitPct =
+      hitTotal > 0 ? `${Math.round(($usage.cacheHitTokens * 100) / hitTotal)}%` : "—";
+    const costText = $usage.cost > 0 ? ` · 成本 ¥${$usage.cost.toFixed(4)}` : "";
+    return `Context 占用 ${formatTokenCount($usage.contextTokens)}/${formatTokenCount($usage.contextLimit)} · 本轮 ${formatTokenCount($usage.inputTokens + $usage.outputTokens)} · 缓存命中 ${hitPct}${costText}`;
+  });
+
   /** Live task observability above the composer while generating. */
   const activity = $derived.by(() => {
     type Act = {
@@ -1483,7 +1493,7 @@ const PLAN_MODE_LABELS: Record<string, string> = {
         <div
           class="usage-meter"
           data-testid="usage-meter"
-          title={layerData ? layerData.title : "Context 占用与本轮 tokens（估算）"}
+          title={usageTitle}
         >
           {#if layerData}
             <div class="usage-meter-bar usage-meter-layered" aria-hidden="true" data-testid="usage-layers">

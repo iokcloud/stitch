@@ -1864,6 +1864,7 @@ async fn pump_agent_events(
     cancel_notify: &tokio::sync::Notify,
     agent_handle: tokio::task::JoinHandle<(anyhow::Result<agent::AgentResult>, Session)>,
     cancel_flag: &AtomicBool,
+    model: &str,
 ) -> Result<Option<Session>, String> {
     pump_agent_events_opts(
         app,
@@ -1872,6 +1873,7 @@ async fn pump_agent_events(
         agent_handle,
         cancel_flag,
         true,
+        model,
     )
     .await
 }
@@ -1886,6 +1888,7 @@ async fn pump_agent_events_opts(
     agent_handle: tokio::task::JoinHandle<(anyhow::Result<agent::AgentResult>, Session)>,
     cancel_flag: &AtomicBool,
     forward_done: bool,
+    model: &str,
 ) -> Result<Option<Session>, String> {
     let mut saw_done = false;
     let mut last_response = String::new();
@@ -1934,6 +1937,17 @@ async fn pump_agent_events_opts(
                         output_tokens: result.output_tokens,
                         context_tokens: result.context_tokens,
                         context_limit: result.context_limit,
+                        cache_hit_tokens: result.cache_hit_tokens,
+                        cache_miss_tokens: result.cache_miss_tokens,
+                        cost: stitch::agent::tokens::estimate_cost(
+                            &stitch::agent::tokens::TokenUsage {
+                                input_tokens: result.input_tokens,
+                                output_tokens: result.output_tokens,
+                                cache_hit_tokens: result.cache_hit_tokens,
+                                cache_miss_tokens: result.cache_miss_tokens,
+                            },
+                            model,
+                        ),
                         hit_iteration_cap: false,
                     })
                     .unwrap_or_default(),
@@ -2300,6 +2314,7 @@ pub async fn send_message(
                 agent_handle,
                 &cancel_flag,
                 false,
+                &model,
             )
             .await?;
 
@@ -2339,11 +2354,12 @@ pub async fn send_message(
         let rules_s = confirm_state.rules.clone();
         let work_dir_s = work_dir.clone();
         let flusher_s = turn_flusher.clone();
+        let model_c = model.clone();
         let agent_handle = tokio::spawn(async move {
             let result = agent::run_react_streaming(
                 &mut session,
                 &api_base,
-                &model,
+                &model_c,
                 &api_key,
                 &tools,
                 summary_budget,
@@ -2365,6 +2381,7 @@ pub async fn send_message(
             agent_handle,
             &cancel_flag,
             true,
+            &model,
         )
         .await?;
 
@@ -2391,11 +2408,12 @@ pub async fn send_message(
     let rules_s = confirm_state.rules.clone();
     let work_dir_s = work_dir.clone();
     let flusher_s = turn_flusher.clone();
+    let model_c = model.clone();
     let agent_handle = tokio::spawn(async move {
         let result = agent::run_react_streaming(
             &mut session,
             &api_base,
-            &model,
+            &model_c,
             &api_key,
             &tools,
             max_iterations,
@@ -2416,6 +2434,7 @@ pub async fn send_message(
         &cancel_notify,
         agent_handle,
         &cancel_flag,
+        &model,
     )
     .await?;
 
@@ -3118,11 +3137,12 @@ pub async fn run_agent(
     let confirm_pending = confirm_state.pending.clone();
     let rules_s = confirm_state.rules.clone();
     let work_dir_s = work_dir.clone();
+    let model_c = model.clone();
     let agent_handle = tokio::spawn(async move {
         let result = agent::run_react_streaming(
             &mut session,
             &api_base,
-            &model,
+            &model_c,
             &api_key,
             &tools,
             max_iterations,
@@ -3143,6 +3163,7 @@ pub async fn run_agent(
         &cancel_notify,
         agent_handle,
         &cancel_flag,
+        &model,
     )
     .await?;
     Ok(())
