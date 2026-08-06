@@ -204,7 +204,7 @@ pub async fn run_chat(
             println!("\n[退出]");
             break;
         }
-        match rl.readline(format!("{model}> ").as_str()) {
+        match rl.readline(&format!("[1;36m❯ {model}[0m ")) {
             Ok(line) => {
                 let _ = rl.add_history_entry(line.as_str());
                 let line = line.trim().to_string();
@@ -255,6 +255,14 @@ pub async fn run_chat(
                 session.add_user_message(&line);
                 turn_count += 1;
                 cancel_flag.store(false, Ordering::SeqCst);
+                // 对话界面：回显用户输入 + 助手标记
+                println!(
+                    "
+[1;33m❯ 你[0m
+{line}
+"
+                );
+                println!("[1;34m❯ Stitch[0m");
 
                 let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel::<AgentEvent>();
                 let max_iterations = cfg.max_iterations;
@@ -351,9 +359,16 @@ pub async fn run_chat(
                 let _ = agent::persist::save_session(&session_dir, &session, &mut manifest);
 
                 if let Some(cost) = turn_cost {
-                    println!("[回合 {turn_count}] 成本 ¥{cost:.4}");
+                    println!(
+                        "
+[90m──── 回合 {turn_count} · 成本 ¥{cost:.4} ────[0m"
+                    );
+                } else {
+                    println!(
+                        "
+[90m──── 回合 {turn_count} ────[0m"
+                    );
                 }
-                println!();
             }
             Err(rustyline::error::ReadlineError::Interrupted) => {
                 // 回合中 Ctrl+C：ctrlc handler 已置 cancel；空闲时退出

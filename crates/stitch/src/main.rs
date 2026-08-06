@@ -38,7 +38,12 @@ fn main() -> anyhow::Result<()> {
 }
 
 async fn run_command(cli: Cli) -> anyhow::Result<()> {
-    match cli.command {
+    // claude 语义：无参数直接进入交互对话
+    let Some(command) = cli.command else {
+        let cfg = config::StitchConfig::load()?;
+        return repl::run_chat(cfg, None, false).await;
+    };
+    match command {
         Command::Run {
             prompt,
             model,

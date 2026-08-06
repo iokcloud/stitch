@@ -9,13 +9,15 @@ use clap::{Parser, Subcommand};
     long_about = "An AI coding agent that turns your prompt workflows into executable actions.\n\nExamples:\n  stitch chat              Start an interactive session\n  stitch chat --continue   Continue your last session\n  stitch run \"fix the bug\"  Run a one-shot task\n  stitch sessions          List your saved sessions\n\nDocs: https://promptstdio.com/docs/stitch"
 )]
 pub struct Cli {
+    /// 无参数时默认进入交互对话（claude 语义）
     #[command(subcommand)]
-    pub command: Command,
+    pub command: Option<Command>,
 }
 
 #[derive(Subcommand)]
 pub enum Command {
-    /// Start an interactive chat session (REPL with history and slash commands)
+    /// Start an interactive chat session (REPL with history and slash commands).
+    /// This is the default: running `stitch` with no arguments enters chat.
     #[command(visible_alias = "c")]
     Chat {
         /// Resume a saved session by id (use `stitch sessions` to list)
