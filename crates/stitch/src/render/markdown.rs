@@ -58,7 +58,7 @@ pub fn render(content: &str) -> io::Result<()> {
                 code_lang.clear();
             }
             Event::Text(ref text) if in_code_block => {
-                code_buf.push_str(text);
+                code_buf.push_str(strip_control(text).as_ref());
             }
 
             // ── Headings ─────────────────────────────────────
@@ -85,7 +85,7 @@ pub fn render(content: &str) -> io::Result<()> {
                 writeln!(out)?;
             }
             Event::Text(ref text) if in_heading => {
-                write!(out, "{text}")?;
+                write!(out, "{}", strip_control(text))?;
             }
 
             // ── Lists ────────────────────────────────────────
@@ -140,7 +140,7 @@ pub fn render(content: &str) -> io::Result<()> {
             // ── Inline code ──────────────────────────────────
             Event::Code(code) => {
                 queue!(out, SetForegroundColor(Color::DarkYellow))?;
-                write!(out, "`{code}`")?;
+                write!(out, "`{}`", strip_control(&code))?;
                 queue!(out, ResetColor)?;
             }
 
@@ -188,7 +188,7 @@ pub fn render(content: &str) -> io::Result<()> {
 
             // ── Images (terminal: show alt text + url) ───────
             Event::Start(Tag::Image { dest_url, .. }) => {
-                write!(out, "[img: {dest_url}]")?;
+                write!(out, "[img: {}]", strip_control(&dest_url))?;
             }
 
             // ── Tables ───────────────────────────────────────
@@ -243,7 +243,7 @@ pub fn render(content: &str) -> io::Result<()> {
 
             // Generic text (when formatting is active, just append)
             Event::Text(ref text) => {
-                write!(out, "{text}")?;
+                write!(out, "{}", strip_control(text))?;
             }
             _ => {}
         }
@@ -408,11 +408,101 @@ fn find_syntax<'a>(ps: &'a SyntaxSet, lang: &str) -> Option<&'a syntect::parsing
 
 use std::time::Instant;
 
+/// 全局语法集 / 主题（惰性加载一次，'static 供流式高亮器跨行持有引用）。
+fn global_syntax_set() -> &'static SyntaxSet {
+    static SS: std::sync::OnceLock<SyntaxSet> = std::sync::OnceLock::new();
+    SS.get_or_init(SyntaxSet::load_defaults_newlines)
+}
+
+fn global_theme() -> &'static syntect::highlighting::Theme {
+    static TS: std::sync::OnceLock<syntect::highlighting::ThemeSet> = std::sync::OnceLock::new();
+    TS.get_or_init(ThemeSet::load_defaults)
+        .themes
+        .get("base16-ocean.dark")
+        .unwrap_or_else(|| {
+            TS.get_or_init(ThemeSet::load_defaults)
+                .themes
+                .values()
+                .next()
+                .expect("ThemeSet has no themes")
+        })
+}
+
+/// 剥离终端控制字符：移除全部 C0 控制符（保留 \t \n \r），阻断
+/// ANSI/OSC/DCS 转义注入（一切以 ESC 开头的序列）。正常内容
+/// （无控制字符）零拷贝借用，流式热路径无额外开销。
+pub(crate) fn strip_control(s: &str) -> std::borrow::Cow<'_, str> {
+    if !s
+        .chars()
+        .any(|c| c < ' ' && c != '\t' && c != '\n' && c != '\r')
+    {
+        return std::borrow::Cow::Borrowed(s);
+    }
+    std::borrow::Cow::Owned(
+        s.chars()
+            .filter(|&c| c >= ' ' || c == '\t' || c == '\n' || c == '\r')
+            .collect(),
+    )
+}
+
+/// 围栏语言名消毒：只保留 ASCII 字母数字与 `-` `_` `+` `#`，其余全部
+/// 剥离（含 ANSI 转义）。syntect 合法语言名（Rust/C++/C#/Objective-C/
+/// x86_64 等）全由此类字符构成；消毒后为空时退化为无高亮，不影响围栏
+/// 判定与边框渲染。
+fn sanitize_lang(lang: &str) -> String {
+    lang.chars()
+        .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '+' | '#'))
+        .collect()
+}
+
+/// 标题行判定：# 开头（1-6 个）且后随空格（`#1 问题` 不算标题）。
+fn is_heading_line(line: &str) -> bool {
+    let t = line.trim_start();
+    let hash_count = t.chars().take_while(|&c| c == '#').count();
+    (1..=6).contains(&hash_count) && t.chars().nth(hash_count) == Some(' ')
+}
+
+/// 疑似围栏行（```/~~~ 开头）或标题行 → 延迟到行完整再渲染。
+fn looks_like_fence_or_heading(s: &str) -> bool {
+    fence_info(s).is_some() || s.trim_start().starts_with(['`', '~']) || is_heading_line(s)
+}
+
+/// 判定整行是否为围栏（``` 或 ~~~，≥3 个），返回围栏后的语言名。
+fn fence_info(line: &str) -> Option<String> {
+    let t = line.trim();
+    let marker = if t.starts_with("```") {
+        Some("```")
+    } else if t.starts_with("~~~") {
+        Some("~~~")
+    } else {
+        None
+    };
+    let marker = marker?;
+    let rest = t[marker.len()..].trim();
+    if rest.len() >= 3 {
+        // 连续围栏符开头（如 ````rust）——仍按围栏处理，语言取剥完 marker 后的部分
+        return Some(rest.trim_start_matches(['`', '~']).trim().to_string());
+    }
+    Some(rest.to_string())
+}
+
 /// Streaming token buffer — reduces terminal flicker by batching rapid tokens.
+///
+/// 增量 markdown 渲染（交互模式流式路径）：普通文本逐 token 直出保住
+/// 动态感；代码块维护跨 chunk 状态，整行渲染 ┌─/│/└─ 边框 + syntect
+/// 高亮（HighlightLines 天然跨行，多行字符串不断裂）。
 #[derive(Default)]
 pub struct StreamBuf {
     buf: String,
     last_flush: Option<Instant>,
+    /// 等待完整的行（代码块内行 / 疑似围栏行，跨 chunk 累积）。
+    pending_line: String,
+    /// 是否在代码块内（跨 chunk）。
+    in_code: bool,
+    /// 当前代码块语言（顶边框显示）。
+    code_lang: String,
+    /// 当前代码块行高亮器（跨行状态，退出代码块时复位）。
+    highlighter: Option<HighlightLines<'static>>,
 }
 
 impl StreamBuf {
@@ -421,7 +511,7 @@ impl StreamBuf {
 
     /// Push a token; flushes if the buffer is full or the interval has elapsed.
     pub fn push(&mut self, token: &str) -> io::Result<()> {
-        self.buf.push_str(token);
+        self.buf.push_str(&strip_control(token));
 
         let now = Instant::now();
         let should_flush = match self.last_flush {
@@ -440,20 +530,159 @@ impl StreamBuf {
 
     /// Flush remaining content (call at end of stream).
     pub fn finish(&mut self) -> io::Result<()> {
-        if !self.buf.is_empty() {
-            self.flush_now()?;
+        self.flush_now()?;
+        // 代码块未闭合（回合被中断等）——补底边框并复位状态
+        if self.in_code {
+            let mut out = stdout();
+            queue!(out, SetForegroundColor(Color::DarkGrey))?;
+            writeln!(out, "└─")?;
+            queue!(out, ResetColor)?;
+            out.flush()?;
+            self.in_code = false;
+            self.code_lang.clear();
+            self.highlighter = None;
         }
         Ok(())
     }
 
     fn flush_now(&mut self) -> io::Result<()> {
-        let mut out = stdout();
-        write!(out, "{}", self.buf)?;
-        out.flush()?;
+        self.pending_line.push_str(&self.buf);
         self.buf.clear();
+
+        let mut out = stdout();
+        self.process_available_lines(&mut out)?;
+
+        // 代码块内：剩余行尾等下一 chunk；代码块外：普通文本立即直出
+        // （保持逐 token 动态感），疑似围栏行/标题行延迟到完整再判定
+        if !self.in_code
+            && !self.pending_line.is_empty()
+            && !looks_like_fence_or_heading(&self.pending_line)
+        {
+            write!(out, "{}", self.pending_line)?;
+            self.pending_line.clear();
+        }
+
+        out.flush()?;
         self.last_flush = Some(Instant::now());
         Ok(())
     }
+
+    /// 渲染 pending_line 中所有完整行（含换行结尾）。
+    fn process_available_lines(&mut self, out: &mut impl Write) -> io::Result<()> {
+        while let Some(nl) = self.pending_line.find('\n') {
+            let line = self.pending_line[..=nl].to_string();
+            self.pending_line.drain(..=nl);
+            self.render_line(out, &line)?;
+        }
+        Ok(())
+    }
+
+    /// 渲染一行（含结尾换行）。
+    fn render_line(&mut self, out: &mut impl Write, line: &str) -> io::Result<()> {
+        if let Some(lang) = fence_info(line) {
+            if self.in_code {
+                // 围栏闭合：底边框
+                queue!(out, SetForegroundColor(Color::DarkGrey))?;
+                writeln!(out, "└─")?;
+                queue!(out, ResetColor)?;
+                self.in_code = false;
+                self.code_lang.clear();
+                self.highlighter = None;
+            } else {
+                // 围栏开启：顶边框 + 语言（先消毒，防 ANSI 转义注入）
+                let lang = sanitize_lang(&lang);
+                self.in_code = true;
+                self.code_lang.clone_from(&lang);
+                queue!(out, SetForegroundColor(Color::DarkGrey))?;
+                writeln!(out, "┌─ {lang}")?;
+                queue!(out, ResetColor)?;
+                self.highlighter = find_syntax(global_syntax_set(), &lang)
+                    .map(|s| HighlightLines::new(s, global_theme()));
+            }
+            return Ok(());
+        }
+
+        if self.in_code {
+            // 代码行：│ 前缀 + 语法高亮（跨行状态保留）
+            queue!(out, SetForegroundColor(Color::DarkGrey))?;
+            write!(out, "│ ")?;
+            queue!(out, ResetColor)?;
+            if let Some(h) = &mut self.highlighter {
+                let ranges = h
+                    .highlight_line(line, global_syntax_set())
+                    .map_err(|e| io::Error::other(e.to_string()))?;
+                let escaped = syntect::util::as_24_bit_terminal_escaped(&ranges, false);
+                write!(out, "{escaped}")?;
+            } else {
+                queue!(out, SetForegroundColor(Color::Grey))?;
+                write!(out, "{line}")?;
+                queue!(out, ResetColor)?;
+            }
+            return Ok(());
+        }
+
+        // 普通文本：标题加粗 + 行内 code/加粗（原样直出保动态感）
+        write!(out, "{}", style_plain_line(line))?;
+        Ok(())
+    }
+}
+
+/// 非代码行样式：标题行加粗亮白；行内 `code` 青色、`**加粗**` 加粗。
+/// 配对不完整（跨 chunk 截断）时原样输出，绝不丢字符。
+fn style_plain_line(line: &str) -> std::borrow::Cow<'_, str> {
+    if is_heading_line(line) {
+        return std::borrow::Cow::Owned(format!("\x1b[1;97m{line}\x1b[0m"));
+    }
+    if line.contains('`') || line.contains("**") {
+        return std::borrow::Cow::Owned(highlight_inline(line));
+    }
+    std::borrow::Cow::Borrowed(line)
+}
+
+/// 行内扫描：`code`（反引号配对）青色、`**bold**` 加粗，其余原样。
+fn highlight_inline(line: &str) -> String {
+    let mut out = String::with_capacity(line.len() + 32);
+    let mut rest = line;
+    loop {
+        let nb = rest.find('`');
+        let nd = rest.find("**");
+        let (pos, kind) = match (nb, nd) {
+            (Some(b), Some(d)) if b < d => (b, 'c'),
+            (Some(_), Some(d)) => (d, 'b'),
+            (Some(b), None) => (b, 'c'),
+            (None, Some(d)) => (d, 'b'),
+            (None, None) => {
+                out.push_str(rest);
+                break;
+            }
+        };
+        out.push_str(&rest[..pos]);
+        rest = &rest[pos..];
+        match kind {
+            'c' => {
+                // 配对反引号：rest[1..] 内相对偏移 d，绝对位置 d+1
+                if let Some(d) = rest[1..].find('`') {
+                    let pair_pos = d + 1;
+                    // 含首尾反引号一起上色，反引号保留
+                    out.push_str(&format!("\x1b[36m{}\x1b[0m", &rest[0..=pair_pos]));
+                    rest = &rest[pair_pos + 1..];
+                } else {
+                    out.push('`');
+                    rest = &rest[1..];
+                }
+            }
+            _ => {
+                if let Some(end) = rest[2..].find("**") {
+                    out.push_str(&format!("\x1b[1m{}\x1b[0m", &rest[2..end + 2]));
+                    rest = &rest[end + 4..];
+                } else {
+                    out.push_str("**");
+                    rest = &rest[2..];
+                }
+            }
+        }
+    }
+    out
 }
 
 // ── Tests ───────────────────────────────────────────────────────
@@ -497,5 +726,141 @@ mod tests {
         buf.push(&big).unwrap();
         // Should have flushed — finish should be a no-op
         buf.finish().unwrap();
+    }
+
+    /// 剥离 ANSI CSI 转义（\x1b[...m / \x1b[38;2;r;g;bm），断言用。
+    fn strip_ansi(s: &str) -> String {
+        let mut out = String::new();
+        let mut in_esc = false;
+        for c in s.chars() {
+            if in_esc {
+                if c == 'm' {
+                    in_esc = false;
+                }
+            } else if c == '\x1b' {
+                in_esc = true;
+            } else {
+                out.push(c);
+            }
+        }
+        out
+    }
+
+    /// 流式增量渲染：围栏开 → 代码行（│ 前缀 + 内容）→ 围栏关（└─）。
+    #[test]
+    fn stream_fence_open_code_close() {
+        let mut buf = StreamBuf::default();
+        let mut out = Vec::new();
+
+        buf.render_line(&mut out, "```rust\n").unwrap();
+        assert!(buf.in_code);
+        assert!(buf.code_lang == "rust");
+        let s = String::from_utf8(out.clone()).unwrap();
+        assert!(s.contains("┌─ rust"), "顶边框应带语言: {s}");
+        out.clear();
+
+        buf.render_line(&mut out, "fn main() {}\n").unwrap();
+        let s = String::from_utf8(out.clone()).unwrap();
+        assert!(s.contains("│ "), "代码行应有 │ 前缀: {s}");
+        let plain = strip_ansi(&s);
+        assert!(plain.contains("fn main() {}"), "代码内容保留: {plain}");
+        out.clear();
+
+        buf.render_line(&mut out, "```\n").unwrap();
+        assert!(!buf.in_code, "围栏闭合后退出代码块");
+        let s = String::from_utf8(out.clone()).unwrap();
+        assert!(s.contains("└─"), "应有底边框: {s}");
+    }
+
+    /// 普通文本直出（无样式前缀），保持逐 token 动态感。
+    #[test]
+    fn stream_plain_text_passes_through() {
+        let mut buf = StreamBuf::default();
+        let mut out = Vec::new();
+        buf.render_line(&mut out, "你好，这是一段普通文本\n")
+            .unwrap();
+        let s = String::from_utf8(out.clone()).unwrap();
+        assert_eq!(s, "你好，这是一段普通文本\n");
+    }
+
+    /// 行内样式：`code` 青色、**加粗** 加粗、标题行加粗亮白。
+    #[test]
+    fn inline_code_bold_and_heading_styled() {
+        assert!(style_plain_line("- 使用 `fs::read_to_string` 一步完成\n").contains("\x1b[36m"));
+        assert!(style_plain_line("**重要**：勿删\n").contains("\x1b[1m"));
+        assert!(style_plain_line("## 读取文件\n").contains("\x1b[1;97m"));
+        // 剥离 ANSI 后内容一字不丢
+        assert_eq!(
+            strip_ansi(&style_plain_line("- 使用 `fs::read_to_string` 一步完成\n")),
+            "- 使用 `fs::read_to_string` 一步完成\n"
+        );
+        // 非标题（# 后无空格）与无标记行不加样式
+        assert!(!style_plain_line("#1 问题优先\n").contains('\x1b'));
+        assert!(!style_plain_line("普通行\n").contains('\x1b'));
+        // 奇数反引号不 panic、原样
+        assert_eq!(strip_ansi(&style_plain_line("a`b\n")), "a`b\n");
+    }
+
+    /// 围栏行跨 chunk 分片：第一个分片 pending 等待，拼完整后渲染顶边框。
+    #[test]
+    fn stream_fence_split_across_chunks() {
+        let mut buf = StreamBuf::default();
+        let mut out = Vec::new();
+
+        buf.pending_line.push_str("```rus");
+        buf.process_available_lines(&mut out).unwrap();
+        // 无换行 → 未渲染，仍 pending
+        assert!(out.is_empty(), "未完整行不得输出: {out:?}");
+        assert_eq!(buf.pending_line, "```rus");
+
+        buf.pending_line.push_str("t\n");
+        buf.process_available_lines(&mut out).unwrap();
+        let s = String::from_utf8(out.clone()).unwrap();
+        assert!(s.contains("┌─ rust"), "分片拼合后识别语言: {s}");
+        assert!(buf.in_code);
+    }
+
+    /// 未闭合代码块 finish 时补底边框并复位状态。
+    #[test]
+    fn stream_unclosed_fence_finish_closes() {
+        let mut buf = StreamBuf::default();
+        let mut out = Vec::new();
+        buf.render_line(&mut out, "```python\n").unwrap();
+        out.clear();
+        // finish 直接写 stdout——只验证状态复位
+        buf.finish().unwrap();
+        assert!(!buf.in_code);
+        assert!(buf.highlighter.is_none());
+    }
+
+    /// 转义注入防护：语言名消毒 + 内容控制字符剥离（安全属性断言——
+    /// 输出中不可能出现 ESC 开头的注入序列）。
+    #[test]
+    fn escape_injection_is_stripped() {
+        // 围栏语言名：注入载荷中的 ESC 全部剔除，合法名不受影响
+        let clean = sanitize_lang("\x1b]0;http://evil\x07\x1b[31mrust");
+        assert!(!clean.contains('\x1b'), "语言名不得含 ESC: {clean:?}");
+        assert!(clean.contains("rust"));
+        assert_eq!(sanitize_lang("c++"), "c++");
+        assert_eq!(sanitize_lang("objective-c"), "objective-c");
+        assert_eq!(sanitize_lang("x86_64"), "x86_64");
+
+        // 代码块顶边框：模型侧注入语言名 → 消毒后渲染，无 OSC 序列
+        let mut buf = StreamBuf::default();
+        let mut out = Vec::new();
+        buf.render_line(&mut out, "```\x1b[31mrust\x1b[0m\n")
+            .unwrap();
+        let s = String::from_utf8(out.clone()).unwrap();
+        assert!(!s.contains("\x1b]"), "顶边框不得含 OSC 注入: {s}");
+        assert!(strip_ansi(&s).contains("┌─ "), "顶边框形态: {s}");
+
+        // 内容控制字符剥离（\t\n\r 保留），ESC 是一切转义序列的前缀
+        assert_eq!(strip_control("a\x1b[2Jb\n\tc"), "a[2Jb\n\tc");
+        assert!(!strip_control("ok\x1b]0;x\x07").contains('\x1b'));
+
+        // push 路径的过滤 = strip_control（唯一入口；push 的直出目标是
+        // 真实 stdout，此处置换验证即可覆盖）
+        assert_eq!(strip_control("ok\x1b[?25l"), "ok[?25l");
+        assert_eq!(strip_control("\x1b]0;x\x07ok"), "]0;xok");
     }
 }

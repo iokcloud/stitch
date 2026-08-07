@@ -14,7 +14,7 @@ path = "src/main.rs"
 
 [features]
 default = []
-tui = ["dep:ratatui", "dep:tui-textarea"]
+tui = ["dep:ratatui"]
 
 [dependencies]
 # Workspace shared
@@ -41,7 +41,7 @@ pulldown-cmark = { version = "0.12", default-features = false, features = ["html
 
 # Interactive prompts
 dialoguer = "0.11"
-rustyline = "15"
+rustyline = "18"
 ctrlc = "3.4"
 uuid = { workspace = true }
 
@@ -72,8 +72,7 @@ rmcp = { version = "2.2.0", default-features = false, features = [
 http = "1"
 
 # Optional TUI mode
-ratatui = { version = "0.29", optional = true }
-tui-textarea = { version = "0.7", optional = true }
+ratatui = { version = "0.30", optional = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows = { version = "0.61", features = [

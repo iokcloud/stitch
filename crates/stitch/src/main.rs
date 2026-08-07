@@ -698,7 +698,9 @@ async fn cmd_run(
             >::new()));
             let allow_rules_arc = Arc::new(std::sync::Mutex::new(allow_rules.clone()));
             // 事件通道无人消费 → 渲染静默（stdout 只出 JSON）
-            agent::run_react_streaming(
+            // 错误也走机器可读：LLM 401/超时/网络等 → stdout 输出错误对象（exit 1），
+            // CI 不用解析 stderr 文本
+            match agent::run_react_streaming(
                 &mut session,
                 &cfg.llm_api_base,
                 &model,
@@ -712,7 +714,18 @@ async fn cmd_run(
                 &std::sync::atomic::AtomicBool::new(false),
                 None,
             )
-            .await?
+            .await
+            {
+                Ok(r) => r,
+                Err(e) => {
+                    let err_out = serde_json::json!({
+                        "type": "error",
+                        "error": e.to_string(),
+                    });
+                    println!("{}", serde_json::to_string_pretty(&err_out)?);
+                    std::process::exit(1);
+                }
+            }
         }
         cli::OutputFormat::StreamJson => {
             // NDJSON 事件流：每行一个 AgentEvent；确认走 control_request/response
@@ -809,7 +822,17 @@ async fn cmd_run(
             let (turn_result, _returned_session) = handle
                 .await
                 .map_err(|e| anyhow::anyhow!("回合执行失败：{e}"))?;
-            turn_result?
+            // 事件流模式错误也结构化：末行输出 {"type":"error",…}（exit 1）
+            match turn_result {
+                Ok(r) => r,
+                Err(e) => {
+                    println!(
+                        "{}",
+                        serde_json::json!({ "type": "error", "error": e.to_string() })
+                    );
+                    std::process::exit(1);
+                }
+            }
         }
     };
 

@@ -61,6 +61,7 @@ enum SlashAction {
     Statusline(Vec<String>),
     Search(String),
     Think(Vec<String>),
+    Init,
     Help,
     /// 自定义 slash 命令（.claude/commands/*.md）：(命令名, 参数)
     Custom(String, String),
@@ -107,6 +108,7 @@ const SLASH_HELP: &str = r#"
   /statusline [clear|set]  Show / configure the status line (interactive picker)
   /search <关键词>          Search all sessions' history for a keyword
   /think [on|off]          Show the model's thinking process (default off)
+  /init                    Create a CLAUDE.md project memory file (does not overwrite)
   Tab                      Complete slash commands / file names
   单独一行 {                Multi-line input (end with a line of just })
   Ctrl+C                   Interrupt the current turn (press again when idle to quit)
@@ -154,6 +156,7 @@ fn parse_slash(line: &str) -> SlashAction {
         }
         "/search" => SlashAction::Search(rest),
         "/think" => SlashAction::Think(rest.split_whitespace().map(str::to_string).collect()),
+        "/init" => SlashAction::Init,
         _ => {
             let name = cmd.trim_start_matches('/');
             if name.is_empty() {
@@ -200,6 +203,7 @@ const BUILTIN_SLASHES: &[&str] = &[
     "/output-style",
     "/statusline",
     "/search",
+    "/init",
 ];
 
 /// rustyline 补全器：`/` 前缀补全 slash 命令（内置 + 自定义），
@@ -971,17 +975,16 @@ pub async fn run_chat(
             println!("\n[退出]");
             break;
         }
-        // 提示符：❯ + 目录短名 + 模型（Claude Code 式信息密度）
+        // 提示符：❯ + 目录短名 + 模型（Claude Code 式信息密度）。
+        // rustyline 用 raw 算宽度（Windows 无法解析 ANSI 转义），styled 上屏渲染
+        // —— 二者显示宽度必须一致，否则光标位置偏移。
         let dir_short = work_dir
             .rsplit(['/', '\\'])
             .next()
             .filter(|s| !s.is_empty())
             .unwrap_or(&work_dir);
-        let prompt_text = format!(
-            "\x1b[1;36m❯\x1b[0m \x1b[90m{d}\x1b[0m \x1b[1;36m{model}\x1b[0m ",
-            d = dir_short
-        );
-        match rl.readline(&prompt_text) {
+        let (raw_prompt, styled_prompt) = build_prompt(dir_short, &model);
+        match rl.readline(&(raw_prompt.as_str(), styled_prompt.as_str())) {
             Ok(line) => {
                 let _ = rl.add_history_entry(line.as_str());
                 let mut line = line.trim().to_string();
@@ -996,7 +999,7 @@ pub async fn run_chat(
                     );
                     let mut cancelled = false;
                     loop {
-                        match rl.readline("\x1b[1;36m… \x1b[0m") {
+                        match rl.readline(&("… ", "\x1b[1;36m… \x1b[0m")) {
                             Ok(l) => {
                                 if l.trim() == "}" {
                                     break;
@@ -1676,6 +1679,10 @@ pub async fn run_chat(
                                 Err(e) => println!("  [upgrade] \x1b[31m{e}\x1b[0m"),
                             }
                         }
+                        SlashAction::Init => match crate::cmd_init().await {
+                            Ok(()) => {}
+                            Err(e) => println!("  \x1b[31m{e}\x1b[0m"),
+                        },
                         SlashAction::Profile(args) => {
                             cfg.ensure_llm_profiles_seeded();
                             match args.as_slice() {
@@ -2026,18 +2033,43 @@ pub async fn run_chat(
 
                 // 渲染事件流直到回合结束
                 let mut turn_cost: Option<f64> = None;
+                // 首字节前的「正在生成」提示：每秒原地刷新，首个内容事件到达时清行
+                let mut generating = true;
+                let mut last_tick = std::time::Instant::now();
+                // 思考过程行首状态（┆ 前缀只在行首加）
+                let mut thinking_line_start = true;
                 loop {
                     tokio::select! {
                         event = event_rx.recv() => {
                             let Some(ev) = event else { break };
+                            // 任何内容事件都替代「正在生成」提示
+                            if generating {
+                                generating = false;
+                                print!("\r\x1b[K");
+                                let _ = std::io::stdout().flush();
+                            }
                             match ev {
                                 AgentEvent::Token { text } => {
                                     crate::render::render_token(&text);
                                 }
                                 AgentEvent::Thinking { text } => {
-                                    // 思考过程浅色显示（/think on），不入会话消息
-                                    print!("\x1b[90m{text}\x1b[0m");
-                                    let _ = std::io::stdout().flush();
+                                    // 思考过程灰色 ┆ 前缀（/think on），不入会话消息；
+                                    // 控制字符剥离防注入
+                                    let mut out = std::io::stdout();
+                                    for (i, seg) in text.split('\n').enumerate() {
+                                        if i > 0 {
+                                            let _ = writeln!(out);
+                                        }
+                                        if thinking_line_start && !seg.is_empty() {
+                                            let _ = write!(out, "\x1b[90m┆\x1b[0m ");
+                                        }
+                                        let _ = write!(out, "{}", markdown_strip_control(seg));
+                                        thinking_line_start = true;
+                                    }
+                                    if !text.ends_with('\n') {
+                                        thinking_line_start = false;
+                                    }
+                                    let _ = out.flush();
                                 }
                                 AgentEvent::ConfirmRequest { id, tool, message } => {
                                     let allow = crate::render::dialog::confirm(&format!("{tool}: {message}"));
@@ -2047,12 +2079,25 @@ pub async fn run_chat(
                                 }
                                 AgentEvent::ToolStart { name, .. } => {
                                     step_count += 1;
-                                    print!("\n[第{step_count}步] {name} ");
+                                    // 工具名青色加粗；Done 只补 ✓/✗ 与摘要，名字不重复
+                                    print!("\n\x1b[90m·\x1b[0m \x1b[1;36m{name}\x1b[0m ");
                                     let _ = std::io::stdout().flush();
                                 }
-                                AgentEvent::ToolDone { name, success, summary, .. } => {
-                                    let mark = if success { "✓" } else { "✗" };
-                                    println!("{mark} {name} {summary}");
+                                AgentEvent::ToolOutput { text, .. } => {
+                                    // 工具直播输出（ADR-037）：dim 灰色透传，剥控制字符
+                                    print!("\x1b[2m{}\x1b[0m", markdown_strip_control(&text));
+                                    let _ = std::io::stdout().flush();
+                                }
+                                AgentEvent::ToolDone { success, summary, .. } => {
+                                    let mark = if success {
+                                        "\x1b[1;32m✓\x1b[0m"
+                                    } else {
+                                        "\x1b[1;31m✗\x1b[0m"
+                                    };
+                                    // 摘要灰色 + 140 字符截断（防长输出糊屏；chars 保 UTF-8 边界）
+                                    let s: String =
+                                        markdown_strip_control(&summary).chars().take(140).collect();
+                                    println!("{mark} \x1b[90m{s}\x1b[0m");
                                 }
                                 AgentEvent::Done { cost, .. } => {
                                     turn_cost = Some(cost);
@@ -2061,7 +2106,7 @@ pub async fn run_chat(
                                 }
                                 AgentEvent::Error { message } => {
                                     crate::render::finish_stream();
-                                    println!("\n[错误] {message}");
+                                    println!("\n\x1b[1;31m✗ 错误：\x1b[0m{}", markdown_strip_control(&message));
                                 }
                                 _ => {}
                             }
@@ -2069,6 +2114,13 @@ pub async fn run_chat(
                         _ = tokio::time::sleep(std::time::Duration::from_millis(100)) => {
                             if cancel_flag.load(Ordering::SeqCst) {
                                 // 回合被 Ctrl+C 中断：等待 agent 收尾（run_react 会尽快返回）
+                            } else if generating {
+                                if last_tick.elapsed() >= std::time::Duration::from_secs(1) {
+                                    last_tick = std::time::Instant::now();
+                                    let secs = turn_started.elapsed().as_secs();
+                                    print!("\r\x1b[K\x1b[90m正在生成 · {secs}s（Ctrl+C 中断）\x1b[0m");
+                                    let _ = std::io::stdout().flush();
+                                }
                             } else if last_progress.elapsed() >= std::time::Duration::from_secs(10) {
                                 // 长回合进度心跳：已用时 + 工具步数（用户可据节奏预估剩余）
                                 last_progress = std::time::Instant::now();
@@ -2082,6 +2134,11 @@ pub async fn run_chat(
                     if event_rx.is_empty() && handle.is_finished() {
                         break;
                     }
+                }
+                // 回合结束：清掉可能残留的「正在生成」提示
+                if generating {
+                    print!("\r\x1b[K");
+                    let _ = std::io::stdout().flush();
                 }
                 crate::render::finish_stream();
                 cancel_flag.store(false, Ordering::SeqCst);
@@ -2389,10 +2446,56 @@ fn pick_model(current: &str) -> anyhow::Result<String> {
 #[allow(dead_code)]
 pub fn cmd_stub() {}
 
+/// 构建交互提示符：`(raw, styled)` 双通道。
+///
+/// raw 必须是纯文本（rustyline 在 Windows 上无法解析 ANSI 转义，用它计算
+/// 光标宽度）；styled 带颜色用于实际渲染。二者可见宽度必须一致。
+/// 剥离终端控制字符（转义注入防护）——复用 markdown 渲染器同一实现，
+/// 工具输出/思考/错误等外部文本进终端前统一过滤。
+fn markdown_strip_control(s: &str) -> std::borrow::Cow<'_, str> {
+    crate::render::markdown::strip_control(s)
+}
+
+fn build_prompt(dir_short: &str, model: &str) -> (String, String) {
+    let raw = format!("❯ {dir_short} {model} ");
+    let styled = format!("\x1b[1;36m❯\x1b[0m \x1b[90m{dir_short}\x1b[0m \x1b[1;36m{model}\x1b[0m ");
+    (raw, styled)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use rustyline::completion::Completer as _;
+
+    /// 剥离 ANSI CSI 转义序列（\x1b[...m），测试用。
+    fn strip_ansi(s: &str) -> String {
+        let mut out = String::new();
+        let mut in_esc = false;
+        for c in s.chars() {
+            if in_esc {
+                if c == 'm' {
+                    in_esc = false;
+                }
+            } else if c == '\x1b' {
+                in_esc = true;
+            } else {
+                out.push(c);
+            }
+        }
+        out
+    }
+
+    /// 提示符回归锁：raw 必须无 ANSI（Windows rustyline 宽度计算会把它
+    /// 计入光标位置，导致「光标离得很远」），styled 剥掉 ANSI 后必须与
+    /// raw 完全一致（显示宽度一致）。
+    #[test]
+    fn prompt_raw_plain_and_styled_matches() {
+        let (raw, styled) = build_prompt("promptstdio", "deepseek-v4-flash");
+        assert!(!raw.contains('\x1b'), "raw 提示符不得含 ANSI 转义");
+        assert_eq!(strip_ansi(&styled), raw);
+        // 期望形态：❯ <目录> <模型>（尾部空格）
+        assert_eq!(raw, "❯ promptstdio deepseek-v4-flash ");
+    }
 
     /// 补全测试用的 Context（rustyline 15 的 Context::new 需要 history 参数）。
     fn repl_test_ctx() -> rustyline::Context<'static> {
@@ -2512,6 +2615,7 @@ mod tests {
             other => panic!("expected Think(on), got {other:?}"),
         }
         assert!(matches!(parse_slash("/think"), SlashAction::Think(args) if args.is_empty()));
+        assert!(matches!(parse_slash("/init"), SlashAction::Init));
         // 非 slash 行不该走到这里（调用方先判断 starts_with('/')）
     }
 
