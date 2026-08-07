@@ -95,7 +95,7 @@ async fn run_command(cli: Cli) -> anyhow::Result<()> {
             .await;
         }
         let cfg = config::StitchConfig::load()?;
-        crate::upgrade::spawn_update_check();
+        crate::upgrade::check_update_and_hint().await;
         return repl::run_chat(
             cfg,
             None,
@@ -167,7 +167,7 @@ async fn run_command(cli: Cli) -> anyhow::Result<()> {
                 }
                 None => None,
             };
-            crate::upgrade::spawn_update_check();
+            crate::upgrade::check_update_and_hint().await;
             repl::run_chat(
                 cfg,
                 resume,
@@ -834,9 +834,15 @@ async fn cmd_run(
             "cache_hit_tokens": result.cache_hit_tokens,
             "cache_miss_tokens": result.cache_miss_tokens,
             "cost": cost,
+            // 工具失败计数（非 0 → 退出码 1）——CI 判断任务是否干净完成
+            "tool_errors": result.tool_errors,
         });
         println!("{}", serde_json::to_string_pretty(&out)?);
-        return Ok(());
+        return if result.tool_errors > 0 {
+            std::process::exit(1)
+        } else {
+            Ok(())
+        };
     }
 
     if format == cli::OutputFormat::StreamJson {
@@ -850,9 +856,14 @@ async fn cmd_run(
             "cache_hit_tokens": result.cache_hit_tokens,
             "cache_miss_tokens": result.cache_miss_tokens,
             "cost": cost,
+            "tool_errors": result.tool_errors,
         });
         println!("{}", serde_json::to_string(&out)?);
-        return Ok(());
+        return if result.tool_errors > 0 {
+            std::process::exit(1)
+        } else {
+            Ok(())
+        };
     }
 
     eprintln!("---- done ({} iterations) ----", result.iterations);
@@ -876,6 +887,13 @@ async fn cmd_run(
             result.cache_hit_tokens,
             result.cache_miss_tokens,
         );
+    }
+    if result.tool_errors > 0 {
+        eprintln!(
+            "---- 有 {n} 个工具调用失败（exit 1）——用 --json 看 tool_errors 明细 ----",
+            n = result.tool_errors
+        );
+        std::process::exit(1);
     }
     Ok(())
 }

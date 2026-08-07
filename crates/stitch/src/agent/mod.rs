@@ -36,6 +36,24 @@ pub struct AgentResult {
     pub cache_hit_tokens: u64,
     /// 服务端真实缓存未命中输入 token。
     pub cache_miss_tokens: u64,
+    /// 本轮工具调用失败次数（success=false 且非用户取消）——CI/脚本可据此
+    /// 判断任务是否干净完成；0 表示全部工具调用成功或被用户取消。
+    #[serde(default)]
+    pub tool_errors: usize,
+}
+
+/// 工具结果判定：`success=true` 或 `cancelled=true` 视为非失败，
+/// 其余（缺字段 / error / success=false）视为失败。
+fn tool_call_failed(result: &serde_json::Value) -> bool {
+    let ok = result
+        .get("success")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+        || result
+            .get("cancelled")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+    !ok
 }
 
 /// Events emitted during agent execution for streaming UIs.
@@ -310,6 +328,7 @@ pub(crate) async fn run_react_core<R: ReactRenderer>(
     renderer: &mut R,
 ) -> anyhow::Result<AgentResult> {
     let mut usage = tokens::TokenUsage::default();
+    let mut tool_errors = 0usize;
     let tool_defs = build_openai_tools(tools);
     let native_tool_defs = tools.definitions();
     let mut tool_guard = guard::ToolCallGuard::new();
@@ -441,7 +460,14 @@ pub(crate) async fn run_react_core<R: ReactRenderer>(
                 if !text.is_empty() {
                     session.add_assistant_message(&text);
                 }
-                let result = make_result(text.clone(), iteration + 1, &usage, session, model);
+                let result = make_result(
+                    text.clone(),
+                    iteration + 1,
+                    &usage,
+                    session,
+                    model,
+                    tool_errors,
+                );
                 emit_done(renderer, &result, false, model);
                 return Ok(result);
             }
@@ -477,6 +503,8 @@ pub(crate) async fn run_react_core<R: ReactRenderer>(
                             execute_tool_with_renderer(tools, tc, work_dir, renderer).await;
                         enrich_tool_observation(&tc.name, result)
                     };
+                    let failed = tool_call_failed(&result);
+                    tool_errors += usize::from(failed);
                     let result_str = serde_json::to_string(&result).unwrap_or_default();
                     let summary = truncate_output(&result_str);
                     // Benchmark metrics ride along structured (not just inside
@@ -490,8 +518,9 @@ pub(crate) async fn run_react_core<R: ReactRenderer>(
                     renderer.on_event(AgentEvent::ToolDone {
                         name: tc.name.clone(),
                         call_id: tc.id.clone(),
-                        success: result_str.contains("\"success\":true")
-                            || result_str.contains("\"cancelled\":true"),
+                        // 结构化判定（非字符串 contains——工具输出文本里碰巧
+                        // 出现 "success":true 字样曾致误判为成功）。
+                        success: !failed,
                         summary,
                         metrics,
                     });
@@ -520,7 +549,14 @@ pub(crate) async fn run_react_core<R: ReactRenderer>(
                 );
             }
             ResponseType::Empty => {
-                let result = make_result(String::new(), iteration + 1, &usage, session, model);
+                let result = make_result(
+                    String::new(),
+                    iteration + 1,
+                    &usage,
+                    session,
+                    model,
+                    tool_errors,
+                );
                 emit_done(renderer, &result, false, model);
                 return Ok(result);
             }
@@ -565,7 +601,7 @@ pub(crate) async fn run_react_core<R: ReactRenderer>(
         ResponseType::ApiError(msg) => anyhow::bail!("{msg}"),
         ResponseType::TextOnly(text) | ResponseType::ToolCalls { text, .. } => {
             usage.output_tokens += tokens::estimate_text(&text);
-            make_result(text, max_iterations, &usage, session, model)
+            make_result(text, max_iterations, &usage, session, model, tool_errors)
         }
         ResponseType::Empty => make_result(
             "Max iterations reached.".into(),
@@ -573,6 +609,7 @@ pub(crate) async fn run_react_core<R: ReactRenderer>(
             &usage,
             session,
             model,
+            tool_errors,
         ),
     };
     emit_done(renderer, &result, true, model);
@@ -861,6 +898,7 @@ fn make_result(
     usage: &tokens::TokenUsage,
     session: &Session,
     model: &str,
+    tool_errors: usize,
 ) -> AgentResult {
     let context_limit = tokens::context_limit_for_model(model);
     let context_tokens = tokens::estimate_messages(&session.messages);
@@ -874,6 +912,7 @@ fn make_result(
         context_limit,
         cache_hit_tokens: usage.cache_hit_tokens,
         cache_miss_tokens: usage.cache_miss_tokens,
+        tool_errors,
     }
 }
 
@@ -1312,7 +1351,29 @@ Allow?",
 
 #[cfg(test)]
 mod tests {
-    use super::{enrich_tool_observation, truncate_output};
+    use super::{enrich_tool_observation, tool_call_failed, truncate_output};
+
+    #[test]
+    fn tool_call_failed_judges_structurally() {
+        // success=true → 非失败
+        assert!(!tool_call_failed(&serde_json::json!({"success": true})));
+        // cancelled=true（用户拒绝/deny 规则）→ 非失败，不计入 tool_errors
+        assert!(!tool_call_failed(&serde_json::json!({"cancelled": true})));
+        // success=false → 失败
+        assert!(tool_call_failed(&serde_json::json!({"success": false})));
+        // 未知工具/参数错误（只有 error 字段）→ 失败
+        assert!(tool_call_failed(
+            &serde_json::json!({"error": "Unknown tool: x"})
+        ));
+        // 缺字段 → 失败（防御：不带成功标记一律计失败）
+        assert!(tool_call_failed(&serde_json::json!({"output": "…"})));
+        // 工具输出文本里碰巧出现 "success":true 字样 → 结构化判定不受骗
+        let polluted = serde_json::json!({
+            "success": false,
+            "output": "echo \"success\":true",
+        });
+        assert!(tool_call_failed(&polluted), "字符串 contains 判定会被污染");
+    }
 
     fn truncate_output_keeps_output_under_20kb_verbatim() {
         let line = "审查验收证明".repeat(80); // multi-byte, under 20KB

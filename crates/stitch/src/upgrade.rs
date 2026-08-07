@@ -102,23 +102,51 @@ pub async fn run() -> anyhow::Result<()> {
         let _ = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o755));
     }
 
-    // 覆盖自身：Unix 直接 rename；Windows 运行中的 exe 被锁，提示手动替换
+    // 覆盖自身：Unix 直接 rename；Windows 运行中的 exe 被锁 → 生成延迟替换
+    // 脚本（exe 退出后自动替换，无需手动 move——0.5.1 及以前要手动执行）
     match std::fs::rename(&tmp, &exe) {
         Ok(()) => {
             println!("已升级到 v{latest}。");
         }
         Err(_) if cfg!(windows) => {
-            println!("下载完成（校验通过），但 Windows 正在运行的程序无法覆盖自身。");
-            println!("请退出当前会话后在同目录执行：");
-            println!(
-                "  move /y \"{}\" \"{}\"",
-                tmp.file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or("stitch.exe.upgrade"),
-                exe.file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or("stitch.exe"),
+            let exe_name = exe
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("stitch.exe");
+            let tmp_name = tmp
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("stitch.exe.upgrade");
+            let bat = exe.with_file_name(format!("{exe_name}.upgrade.bat"));
+            let script = format!(
+                "@echo off\r\n\
+                 rem Stitch 延迟替换：等 exe 退出后自动升级（临时脚本，结束后自删）\r\n\
+                 :wait\r\n\
+                 tasklist /fi \"IMAGENAME eq {exe_name}\" | findstr /i \"{exe_name}\" >nul 2>&1\r\n\
+                 if not errorlevel 1 (\r\n\
+                 \x20 timeout /t 2 /nobreak >nul\r\n\
+                 \x20 goto :wait\r\n\
+                 )\r\n\
+                 move /y \"%~dp0{tmp_name}\" \"%~dp0{exe_name}\" >nul\r\n\
+                 if exist \"%~dp0{tmp_name}\" (\r\n\
+                 \x20 echo [stitch] 替换失败，请稍后手动执行: move /y \"%~dp0{tmp_name}\" \"%~dp0{exe_name}\"\r\n\
+                 \x20 pause\r\n\
+                 )\r\n\
+                 del \"%~f0\" >nul 2>&1\r\n"
             );
+            std::fs::write(&bat, script).map_err(|e| anyhow::anyhow!("无法写入升级脚本：{e}"))?;
+            // 隐藏窗口静默执行延迟替换（PowerShell Start-Process -WindowStyle Hidden）
+            let bat_path = bat.display().to_string().replace('\'', "''");
+            let _ = std::process::Command::new("powershell")
+                .args([
+                    "-NoProfile",
+                    "-WindowStyle",
+                    "Hidden",
+                    "-Command",
+                    &format!("Start-Process -FilePath '{bat_path}' -WindowStyle Hidden"),
+                ])
+                .spawn();
+            println!("已下载 v{latest}（校验通过）。退出本会话后自动完成替换，无需手动操作。");
         }
         Err(e) => {
             let _ = std::fs::remove_file(&tmp);
@@ -128,17 +156,36 @@ pub async fn run() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// 启动时后台检查新版本（10s 超时 · 失败静默 · 不阻塞启动）。
-/// 发现新版本时打印提示（交互模式下会话内可直接 `/upgrade` 一键升级）。
-pub fn spawn_update_check() {
-    tokio::spawn(async {
-        let Ok(latest) = fetch_latest_version().await else {
-            return; // 离线/慢网/清单异常：静默，不打扰
-        };
-        if let Some(text) = update_hint_text(&latest, env!("CARGO_PKG_VERSION")) {
-            println!("\x1b[90m{text}\x1b[0m");
-        }
-    });
+/// 启动时检查新版本并打印提示（主线程同步调用 · 3s 短超时 · 失败静默）。
+///
+/// 不能用后台线程 + println：rustyline 接管终端后，后台输出与主循环
+/// 渲染竞争会被吞/错位（真机复现：0.5.1 启动提示不显示）。同步检查
+/// 正常网络 <100ms 无感；3s 超时上限保证坏网络下不卡启动。
+pub async fn check_update_and_hint() {
+    let Ok(latest) = fetch_latest_version_short().await else {
+        return; // 离线/慢网/清单异常：静默，不打扰
+    };
+    if let Some(text) = update_hint_text(&latest, env!("CARGO_PKG_VERSION")) {
+        println!("\x1b[90m{text}\x1b[0m");
+        let _ = std::io::stdout().flush();
+    }
+}
+
+/// 拉取官网版本清单中的最新版本号（3s 短超时；失败返回 Err，调用方静默）。
+async fn fetch_latest_version_short() -> anyhow::Result<String> {
+    let client = reqwest::Client::new();
+    let manifest: serde_json::Value = client
+        .get(VERSION_URL)
+        .timeout(std::time::Duration::from_secs(3))
+        .send()
+        .await?
+        .json()
+        .await?;
+    Ok(manifest
+        .get("version")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string())
 }
 
 /// 新版本提示文案；无新版本返回 None（纯函数，可测）。
@@ -150,23 +197,6 @@ pub fn update_hint_text(latest: &str, current: &str) -> Option<String> {
     } else {
         None
     }
-}
-
-/// 拉取官网版本清单中的最新版本号（失败返回 Err，调用方静默）。
-async fn fetch_latest_version() -> anyhow::Result<String> {
-    let client = reqwest::Client::new();
-    let manifest: serde_json::Value = client
-        .get(VERSION_URL)
-        .timeout(std::time::Duration::from_secs(10))
-        .send()
-        .await?
-        .json()
-        .await?;
-    Ok(manifest
-        .get("version")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string())
 }
 
 /// 语义版本比较：`a` 是否高于 `b`（x.y.z 三段；解析失败视为不高于）。
