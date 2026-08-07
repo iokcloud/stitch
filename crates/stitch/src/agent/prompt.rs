@@ -8,6 +8,7 @@
 //! 5. PromptStdio task suite / agent configuration (via MCP)
 
 use crate::tools::ToolRegistry;
+use std::sync::Mutex;
 
 /// Context about the current workspace for the system prompt.
 #[derive(Debug, Clone, Default)]
@@ -18,6 +19,48 @@ pub struct WorkspaceContext {
     /// Auto-detected project info (framework, language, build system)
     pub project_type: Option<String>,
     pub project_files: Vec<String>,
+}
+
+/// `--append-system-prompt` 追加提示（进程级单例，permission.rs 同模式）：
+/// CLI 启动时 set 一次，build_* 系列在系统提示最末尾注入（最高优先）。
+static APPEND_PROMPTS: std::sync::LazyLock<Mutex<Vec<String>>> =
+    std::sync::LazyLock::new(|| Mutex::new(Vec::new()));
+
+/// 设置追加提示列表（CLI flag + settings.json 合并后调用一次）。
+pub fn set_append_prompts(prompts: Vec<String>) {
+    if let Ok(mut g) = APPEND_PROMPTS.lock() {
+        *g = prompts;
+    }
+}
+
+/// 清空追加提示（测试隔离用）。
+pub fn clear_append_prompts() {
+    set_append_prompts(Vec::new());
+}
+
+/// 追加提示只读快照。
+fn append_prompts() -> Vec<String> {
+    APPEND_PROMPTS.lock().map(|g| g.clone()).unwrap_or_default()
+}
+
+/// Append the `--add-dir` additional directories to an existing system prompt.
+/// Declares each extra root as workspace-accessible (same path rules as the
+/// working directory; relative paths still resolve against the working dir).
+pub fn append_additional_dirs(prompt: &mut String, dirs: &[std::path::PathBuf]) {
+    if dirs.is_empty() {
+        return;
+    }
+    prompt.push_str("## Additional Directories\n\n");
+    prompt.push_str(
+        "These directories are attached to the workspace and are as accessible \
+         as the working directory (read and write). Relative tool paths still \
+         resolve against the working directory; use absolute paths to target \
+         these directories:\n\n",
+    );
+    for d in dirs {
+        prompt.push_str(&format!("- {}\n", d.display()));
+    }
+    prompt.push('\n');
 }
 
 /// Build the system prompt for the agent, with dynamic tool descriptions.
@@ -47,7 +90,7 @@ pub fn build_system_prompt_with_skill(
 
 /// Build a prompt with explicit workspace context and optional project rules.
 pub fn build_system_prompt_with_context(
-    _work_dir: &str,
+    work_dir: &str,
     tools: &ToolRegistry,
     ctx: &WorkspaceContext,
     project_rules: Option<&str>,
@@ -109,7 +152,7 @@ pub fn build_system_prompt_with_context(
     }
 
     // ── Workspace memory（模型自主写入，跨会话加载）──────────────────
-    let memory = crate::tools::memory::load_memory(_work_dir);
+    let memory = crate::tools::memory::load_memory(work_dir);
     if !memory.trim().is_empty() {
         prompt.push_str("## Workspace Memory\n\n");
         prompt.push_str(
@@ -117,6 +160,15 @@ pub fn build_system_prompt_with_context(
              update them with save_memory when you learn something reusable:\n\n",
         );
         prompt.push_str(memory.trim());
+        prompt.push_str("\n\n");
+    }
+
+    // ── Ignored files（.stitchignore：read_file / 搜索工具会拒绝）─────
+    if let Some(summary) =
+        crate::tools::ignore::IgnoreRules::load(std::path::Path::new(work_dir)).summary()
+    {
+        prompt.push_str("## Ignored Files\n\n");
+        prompt.push_str(&summary);
         prompt.push_str("\n\n");
     }
 
@@ -209,6 +261,17 @@ pub fn build_system_prompt_with_context(
              If a window blocks your view of the target, minimize it immediately.\n\
              - **Verify after each action**: take a screenshot or window list to confirm the result.\n",
         );
+    }
+
+    // ── 追加提示（--append-system-prompt / settings.json）───────────────
+    // 最末尾注入：用户约束最高优先（Claude Code appendSystemPrompt 语义）
+    let extras = append_prompts();
+    if !extras.is_empty() {
+        prompt.push_str("\n## User-Added Instructions\n\n");
+        for e in &extras {
+            prompt.push_str(e);
+            prompt.push('\n');
+        }
     }
 
     prompt
@@ -401,4 +464,52 @@ fn secs_to_rough_local(secs: u64) -> String {
 
 fn is_leap(y: i64) -> bool {
     (y % 4 == 0 && y % 100 != 0) || (y % 400 == 0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 追加提示是进程级单例：测试必须串行（与 permission.rs 同模式）。
+    fn lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: Mutex<()> = Mutex::new(());
+        LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn build_with_registry() -> String {
+        let tools = crate::tools::ToolRegistry::new();
+        build_system_prompt("test-work-dir", &tools)
+    }
+
+    #[test]
+    fn append_prompts_injected_at_end() {
+        let _g = lock();
+        set_append_prompts(vec!["你是资深 Rust 工程师".into(), "不要问确认".into()]);
+        let p = build_with_registry();
+        assert!(p.contains("## User-Added Instructions"));
+        assert!(p.contains("你是资深 Rust 工程师"));
+        assert!(p.contains("不要问确认"));
+        // 注入在系统提示最末尾（最高优先）
+        assert!(p.trim_end().ends_with("不要问确认"));
+        clear_append_prompts();
+    }
+
+    #[test]
+    fn cleared_append_prompts_not_injected() {
+        let _g = lock();
+        clear_append_prompts();
+        let p = build_with_registry();
+        assert!(!p.contains("## User-Added Instructions"));
+    }
+
+    #[test]
+    fn multiple_append_prompts_kept_in_order() {
+        let _g = lock();
+        set_append_prompts(vec!["第一".into(), "第二".into()]);
+        let p = build_with_registry();
+        let a = p.find("第一").unwrap();
+        let b = p.find("第二").unwrap();
+        assert!(a < b);
+        clear_append_prompts();
+    }
 }

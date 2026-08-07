@@ -3,8 +3,8 @@
 //! Supports precise text replacement in files — find `old_text` and
 //! replace with `new_text`. Multiple edits can be applied atomically.
 
-use super::paths::resolve_under_work_dir;
-use super::{ToolDef, ToolResult};
+use super::paths::resolve_under_roots;
+use super::{ToolDef, ToolResult, extra_roots_impl};
 use std::path::PathBuf;
 
 /// Max number of edits in a single call to prevent abuse.
@@ -16,6 +16,7 @@ const CONTEXT_LINES: usize = 2;
 #[derive(Clone)]
 pub struct EditFile {
     work_dir: PathBuf,
+    extra_roots: Vec<PathBuf>,
 }
 
 impl Default for EditFile {
@@ -28,6 +29,7 @@ impl EditFile {
     pub fn new(work_dir: impl Into<PathBuf>) -> Self {
         Self {
             work_dir: work_dir.into(),
+            extra_roots: Vec::new(),
         }
     }
 
@@ -90,7 +92,7 @@ impl EditFile {
             )));
         }
 
-        let full_path = resolve_under_work_dir(&self.work_dir, raw_path)?;
+        let full_path = resolve_under_roots(&self.roots(), raw_path)?;
 
         // Read original content
         let original = match tokio::fs::read_to_string(&full_path).await {
@@ -224,3 +226,4 @@ fn truncate(s: &str, max: usize) -> String {
         format!("{}…", s.chars().take(max).collect::<String>())
     }
 }
+extra_roots_impl!(EditFile);

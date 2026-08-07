@@ -181,6 +181,27 @@ fn truncate_chars(s: &str, max_chars: usize) -> String {
     }
 }
 
+/// 收集未提交的改动（`git diff HEAD`：已暂存 + 未暂存），供 `/review`
+/// 等命令使用。非 git 仓库或无改动返回空串；超长按 40K 字符截断。
+pub async fn collect_uncommitted_diff(work_dir: &str) -> String {
+    let wd = PathBuf::from(work_dir);
+    let diff = match run_git(&wd, &["diff", "HEAD"]).await {
+        Ok(d) => d,
+        Err(()) => return String::new(), // 非 git 仓库或 git 不可用
+    };
+    let diff = diff.trim().to_string();
+    if diff.is_empty() {
+        return String::new();
+    }
+    let count = diff.chars().count();
+    if count > MAX_DIFF_CHARS {
+        let truncated: String = diff.chars().take(MAX_DIFF_CHARS).collect();
+        format!("{truncated}\n\n... [diff truncated at {MAX_DIFF_CHARS} chars, total {count}]")
+    } else {
+        diff
+    }
+}
+
 async fn run_git(work_dir: &PathBuf, args: &[&str]) -> Result<String, ()> {
     let mut cmd = tokio::process::Command::new("git");
     cmd.args(args).current_dir(work_dir);
@@ -204,5 +225,13 @@ mod tests {
         let out = truncate_chars(&s, 10);
         assert!(out.contains("truncated"));
         assert!(out.is_char_boundary(out.find('\n').unwrap_or(out.len())));
+    }
+
+    #[tokio::test]
+    async fn collect_uncommitted_diff_empty_outside_git() {
+        // 非 git 目录（git 不可用/非仓库）→ 空串，不 panic
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path().display().to_string();
+        assert!(super::collect_uncommitted_diff(&d).await.is_empty());
     }
 }

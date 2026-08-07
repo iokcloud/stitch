@@ -16,17 +16,52 @@ pub mod edit_file;
 pub mod file;
 pub mod find_path;
 pub mod git;
+pub mod ignore;
 pub mod list_dir;
 pub mod memory;
 pub mod paths;
 pub mod process_win;
 pub mod save_skill;
 pub mod search;
+pub mod task;
+pub mod todo;
 pub mod undo;
 pub mod web_fetch;
+pub mod web_search;
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
+
+/// `--add-dir` 附加根注入 trait：路径工具持有主工作目录 + 附加目录，
+/// 路径解析（resolve_under_roots）与确认 gate（path_within_roots）把
+/// 附加目录当作工作区路径处理。
+pub trait ExtraRoots {
+    fn set_extra_roots(&mut self, roots: Vec<PathBuf>);
+    fn extra_roots(&self) -> &[PathBuf];
+}
+
+/// 给路径工具生成 `extra_roots` 字段与 trait impl。
+macro_rules! extra_roots_impl {
+    ($ty:ident) => {
+        impl $ty {
+            fn roots(&self) -> Vec<PathBuf> {
+                let mut r = vec![self.work_dir.clone()];
+                r.extend(self.extra_roots.iter().cloned());
+                r
+            }
+        }
+        impl $crate::tools::ExtraRoots for $ty {
+            fn set_extra_roots(&mut self, roots: Vec<PathBuf>) {
+                self.extra_roots = roots;
+            }
+            fn extra_roots(&self) -> &[PathBuf] {
+                &self.extra_roots
+            }
+        }
+    };
+}
+pub(crate) use extra_roots_impl;
 
 use crate::mcp_protocol::McpToolRuntime;
 
@@ -103,6 +138,7 @@ pub enum Tool {
     GitStatus(git::GitStatus),
     GitDiff(git::GitDiff),
     WebFetch(web_fetch::WebFetch),
+    WebSearch(web_search::WebSearch),
     FindPath(find_path::FindPath),
     CreateDirectory(create_directory::CreateDirectory),
     DeletePath(delete_path::DeletePath),
@@ -121,7 +157,9 @@ pub enum Tool {
     DesktopAppLaunch(desktop::DesktopAppLaunch),
     SaveSkill(save_skill::SaveSkill),
     SaveMemory(memory::SaveMemory),
+    TodoWrite(todo::TodoWrite),
     McpRemote(McpRemoteTool),
+    Task(task::TaskSubagent),
 }
 
 impl Tool {
@@ -136,6 +174,7 @@ impl Tool {
             Self::GitStatus(t) => t.definition(),
             Self::GitDiff(t) => t.definition(),
             Self::WebFetch(t) => t.definition(),
+            Self::WebSearch(t) => t.definition(),
             Self::FindPath(t) => t.definition(),
             Self::CreateDirectory(t) => t.definition(),
             Self::DeletePath(t) => t.definition(),
@@ -154,6 +193,8 @@ impl Tool {
             Self::DesktopAppLaunch(t) => t.definition(),
             Self::SaveSkill(t) => t.definition(),
             Self::SaveMemory(t) => t.definition(),
+            Self::TodoWrite(t) => t.definition(),
+            Self::Task(_) => task::TaskSubagent::definition(),
             Self::McpRemote(t) => ToolDef {
                 name: t.qualified_name.clone(),
                 description: if t.description.is_empty() {
@@ -169,19 +210,23 @@ impl Tool {
     /// Execute with an optional live-output channel (ADR-037): tools that
     /// produce long-running output (today: `run_command`) push each line as
     /// it arrives. Other tools ignore the channel and behave as `execute`.
+    /// Box::pin：Task 工具 → run_react_core → 本方法的递归 async 需要装箱。
     pub async fn execute_with_progress(
         &self,
         arguments: serde_json::Value,
         progress_tx: Option<tokio::sync::mpsc::UnboundedSender<String>>,
         cancel_flag: Option<&std::sync::atomic::AtomicBool>,
     ) -> anyhow::Result<ToolResult> {
-        match self {
-            Self::RunCommand(t) => {
-                t.execute_with_progress(arguments, progress_tx, cancel_flag)
-                    .await
+        Box::pin(async move {
+            match self {
+                Self::RunCommand(t) => {
+                    t.execute_with_progress(arguments, progress_tx, cancel_flag)
+                        .await
+                }
+                _ => self.execute(arguments).await,
             }
-            _ => self.execute(arguments).await,
-        }
+        })
+        .await
     }
 
     pub async fn execute(&self, arguments: serde_json::Value) -> anyhow::Result<ToolResult> {
@@ -195,6 +240,7 @@ impl Tool {
             Self::GitStatus(t) => t.execute(arguments).await,
             Self::GitDiff(t) => t.execute(arguments).await,
             Self::WebFetch(t) => t.execute(arguments).await,
+            Self::WebSearch(t) => t.execute(arguments).await,
             Self::FindPath(t) => t.execute(arguments).await,
             Self::CreateDirectory(t) => t.execute(arguments).await,
             Self::DeletePath(t) => t.execute(arguments).await,
@@ -213,6 +259,8 @@ impl Tool {
             Self::DesktopAppLaunch(t) => t.execute(arguments).await,
             Self::SaveSkill(t) => t.execute(arguments).await,
             Self::SaveMemory(t) => t.execute(arguments).await,
+            Self::TodoWrite(t) => t.execute(arguments).await,
+            Self::Task(t) => t.execute(arguments).await,
             Self::McpRemote(t) => match t.runtime.execute(arguments).await {
                 Ok(output) => Ok(ToolResult {
                     metrics: None,
@@ -235,6 +283,7 @@ impl Tool {
             Self::GitStatus(_) => "git_status",
             Self::GitDiff(_) => "git_diff",
             Self::WebFetch(_) => "web_fetch",
+            Self::WebSearch(_) => "web_search",
             Self::FindPath(_) => "find_path",
             Self::CreateDirectory(_) => "create_directory",
             Self::DeletePath(_) => "delete_path",
@@ -253,6 +302,8 @@ impl Tool {
             Self::DesktopAppLaunch(_) => "desktop_app_launch",
             Self::SaveSkill(_) => "save_skill",
             Self::SaveMemory(_) => "save_memory",
+            Self::TodoWrite(_) => "TodoWrite",
+            Self::Task(_) => "Task",
             Self::McpRemote(t) => t.qualified_name.as_str(),
         }
     }
@@ -384,10 +435,31 @@ impl Tool {
             return None;
         };
         let p = self.read_scope_path(args)?;
-        if paths::path_within(&p, Some(wd)) {
+        if paths::path_within(&p, Some(wd)) || self.in_extra_roots(&p) {
             return None;
         }
         paths::resolve_scoped(std::path::Path::new(wd), &p).ok()
+    }
+
+    /// Whether `user_path` lands inside an `--add-dir` additional root.
+    /// Additional roots are treated like workspace paths: reads need no
+    /// confirmation, writes follow the permission mode as usual.
+    fn in_extra_roots(&self, user_path: &str) -> bool {
+        let roots = match self {
+            Self::ReadFile(t) => t.extra_roots(),
+            Self::WriteFile(t) => t.extra_roots(),
+            Self::EditFile(t) => t.extra_roots(),
+            Self::ListDirectory(t) => t.extra_roots(),
+            Self::GrepSearch(t) => t.extra_roots(),
+            Self::CreateDirectory(t) => t.extra_roots(),
+            Self::DeletePath(t) => t.extra_roots(),
+            Self::CopyPath(t) => t.extra_roots(),
+            _ => return false,
+        };
+        if roots.is_empty() {
+            return false;
+        }
+        paths::path_within_roots(user_path, roots)
     }
 
     /// Whether this call needs user confirmation:
@@ -413,7 +485,11 @@ impl Tool {
             work_dir.map(str::trim).filter(|s| !s.is_empty()),
             self.read_scope_path(args),
         ) {
-            (Some(wd), Some(p)) if !paths::path_within(&p, Some(wd)) => true,
+            (Some(wd), Some(p))
+                if !paths::path_within(&p, Some(wd)) && !self.in_extra_roots(&p) =>
+            {
+                true
+            }
             _ => false,
         }
     }
@@ -626,22 +702,62 @@ impl Default for ToolRegistry {
 
 /// Build the default tool registry with all built-in tools.
 pub fn build_registry(work_dir: &str) -> ToolRegistry {
+    build_registry_with_dirs(work_dir, &[])
+}
+
+/// 带 `--add-dir` 附加目录的注册表：附加根与主工作目录同等对待——
+/// 路径解析允许落在任一根内，附加根内读取免确认（写入仍按权限模式）。
+/// TodoWrite 用独立的会话内存储（/todo 命令不可见；桌面无专用 UI）。
+pub fn build_registry_with_dirs(work_dir: &str, extra_roots: &[PathBuf]) -> ToolRegistry {
+    build_registry_with_todo(
+        work_dir,
+        extra_roots,
+        Arc::new(Mutex::new(todo::TodoStore::new())),
+    )
+}
+
+/// CLI 专用：TodoWrite 挂共享的会话级任务清单（/todo 命令 + 回合进度行共用）。
+pub fn build_registry_with_todo(
+    work_dir: &str,
+    extra_roots: &[PathBuf],
+    todo_store: Arc<Mutex<todo::TodoStore>>,
+) -> ToolRegistry {
     let mut registry = ToolRegistry::new();
-    registry.register(Tool::ListDirectory(list_dir::ListDirectory::new(work_dir)));
-    registry.register(Tool::ReadFile(file::ReadFile::new(work_dir)));
-    registry.register(Tool::WriteFile(file::WriteFile::new(work_dir)));
-    registry.register(Tool::EditFile(edit_file::EditFile::new(work_dir)));
+    let extra = |t: &mut dyn ExtraRoots| {
+        t.set_extra_roots(extra_roots.to_vec());
+    };
+    // 路径工具：注入附加根
+    let mut list = list_dir::ListDirectory::new(work_dir);
+    extra(&mut list);
+    registry.register(Tool::ListDirectory(list));
+    let mut read = file::ReadFile::new(work_dir);
+    extra(&mut read);
+    registry.register(Tool::ReadFile(read));
+    let mut write = file::WriteFile::new(work_dir);
+    extra(&mut write);
+    registry.register(Tool::WriteFile(write));
+    let mut edit = edit_file::EditFile::new(work_dir);
+    extra(&mut edit);
+    registry.register(Tool::EditFile(edit));
+    let mut grep = search::GrepSearch::new(work_dir);
+    extra(&mut grep);
+    registry.register(Tool::GrepSearch(grep));
+    let mut create = create_directory::CreateDirectory::new(work_dir);
+    extra(&mut create);
+    registry.register(Tool::CreateDirectory(create));
+    let mut delete = delete_path::DeletePath::new(work_dir);
+    extra(&mut delete);
+    registry.register(Tool::DeletePath(delete));
+    let mut copy = copy_path::CopyPath::new(work_dir);
+    extra(&mut copy);
+    registry.register(Tool::CopyPath(copy));
+    // 其余工具：与 build_registry 一致
     registry.register(Tool::RunCommand(cmd::RunCommand::new(work_dir)));
-    registry.register(Tool::GrepSearch(search::GrepSearch::new(work_dir)));
     registry.register(Tool::GitStatus(git::GitStatus::new(work_dir)));
     registry.register(Tool::GitDiff(git::GitDiff::new(work_dir)));
     registry.register(Tool::WebFetch(web_fetch::WebFetch::new()));
+    registry.register(Tool::WebSearch(web_search::WebSearch::new()));
     registry.register(Tool::FindPath(find_path::FindPath::new(work_dir)));
-    registry.register(Tool::CreateDirectory(
-        create_directory::CreateDirectory::new(work_dir),
-    ));
-    registry.register(Tool::DeletePath(delete_path::DeletePath::new(work_dir)));
-    registry.register(Tool::CopyPath(copy_path::CopyPath::new(work_dir)));
     registry.register(Tool::UndoLastEdit(undo::UndoLastEdit::new()));
     registry.register(Tool::RedoLastEdit(undo::RedoLastEdit::new()));
     // Desktop automation — Windows-only; no-ops on other platforms
@@ -659,5 +775,38 @@ pub fn build_registry(work_dir: &str) -> ToolRegistry {
     registry.register(Tool::DesktopAppLaunch(desktop::DesktopAppLaunch));
     registry.register(Tool::SaveSkill(save_skill::SaveSkill::new(work_dir)));
     registry.register(Tool::SaveMemory(memory::SaveMemory::new(work_dir)));
+    registry.register(Tool::TodoWrite(todo::TodoWrite::with_store(todo_store)));
     registry
+}
+
+/// 构建子代理运行时上下文（会话级，调用方保存供事件注入）。
+///
+/// `base_registry` 须为**未注册 Task 前**的注册表（克隆给子代理做白名单
+/// 基底——子代理不支持再委派，同时避免 Arc 循环引用）。
+pub fn build_subagent_ctx(
+    api_base: &str,
+    model: &str,
+    api_key: &str,
+    max_iterations: usize,
+    work_dir: Option<&str>,
+    base_registry: &ToolRegistry,
+    agents: Vec<crate::agents::SubAgentDef>,
+) -> std::sync::Arc<task::SubagentCtx> {
+    std::sync::Arc::new(task::SubagentCtx {
+        api_base: api_base.to_string(),
+        model: model.to_string(),
+        api_key: std::sync::Mutex::new(api_key.to_string()),
+        max_iterations,
+        work_dir: work_dir.map(str::to_string),
+        agents,
+        depth: std::sync::atomic::AtomicUsize::new(0),
+        max_depth: 2,
+        event_tx: std::sync::Mutex::new(None),
+        registry: base_registry.clone(),
+    })
+}
+
+/// 把 Task 工具注册进注册表（调用前先 `build_subagent_ctx` 快照基底）。
+pub fn attach_subagents(registry: &mut ToolRegistry, ctx: &std::sync::Arc<task::SubagentCtx>) {
+    registry.register(Tool::Task(task::TaskSubagent { ctx: ctx.clone() }));
 }

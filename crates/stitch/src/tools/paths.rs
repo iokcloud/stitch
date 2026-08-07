@@ -7,22 +7,32 @@ use std::path::{Component, Path, PathBuf};
 
 /// Resolve `user_path` to an absolute path that is guaranteed to be under `work_dir`.
 pub fn resolve_under_work_dir(work_dir: &Path, user_path: &str) -> anyhow::Result<PathBuf> {
+    resolve_under_roots(&[work_dir.to_path_buf()], user_path)
+}
+
+/// Resolve `user_path` under any of the given roots (`roots[0]` is the main
+/// working directory; the rest are `--add-dir` additional directories).
+/// Relative paths resolve against `roots[0]`; absolute paths are allowed only
+/// if they land inside one of the roots. `..` escapes are rejected.
+pub fn resolve_under_roots(roots: &[PathBuf], user_path: &str) -> anyhow::Result<PathBuf> {
     let trimmed = user_path.trim();
     if trimmed.is_empty() {
         anyhow::bail!("Empty path");
     }
-    if looks_absolute(trimmed) {
-        anyhow::bail!("Path must be relative to the working directory: {trimmed}");
-    }
+    let joined = if looks_absolute(trimmed) {
+        normalize_lexically(Path::new(trimmed))
+    } else {
+        let work_abs = abs_work_dir(&roots[0])?;
+        normalize_lexically(&work_abs.join(trimmed))
+    };
 
-    let work_abs = abs_work_dir(work_dir)?;
-    let joined = work_abs.join(trimmed);
-    let normalized = normalize_lexically(&joined);
-
-    if !is_under(&normalized, &work_abs) {
-        anyhow::bail!("Path traversal denied: {trimmed}");
+    for root in roots {
+        let root_abs = abs_work_dir(root)?;
+        if is_under(&joined, &root_abs) {
+            return Ok(joined);
+        }
     }
-    Ok(normalized)
+    anyhow::bail!("Path traversal denied: {trimmed}")
 }
 
 /// Human-readable path relative to `work_dir` (no Windows `\\?\` prefix).
@@ -101,6 +111,17 @@ pub fn strip_verbatim(path: &Path) -> PathBuf {
     } else {
         path.to_path_buf()
     }
+}
+
+/// Whether `user_path` resolves inside any of the given roots (`roots[0]` is
+/// the main working directory). Used by the confirm gate so `--add-dir`
+/// additional directories are treated like workspace paths (reads need no
+/// confirmation; writes follow the permission mode like workspace writes).
+pub fn path_within_roots(user_path: &str, roots: &[PathBuf]) -> bool {
+    roots
+        .iter()
+        .map(|r| r.to_string_lossy().to_string())
+        .any(|r| path_within(user_path, Some(&r)))
 }
 
 /// Whether `user_path` (absolute, or relative to `work_dir`) resolves inside
@@ -191,7 +212,9 @@ mod tests {
         #[cfg(not(windows))]
         let abs = "/tmp/evil.txt";
         let err = resolve_under_work_dir(&dir, abs).unwrap_err();
-        assert!(err.to_string().contains("relative"));
+        // 绝对路径不再一律拒绝：落在根内则允许（--add-dir 语义），
+        // 根外绝对路径拒绝。
+        assert!(err.to_string().contains("denied"));
     }
 
     #[test]
@@ -271,5 +294,46 @@ mod tests {
         assert!(scoped_allowed(&marked));
         let spoofed = serde_json::json!({ "path": "a.txt", "__stitch_scoped": false });
         assert!(!scoped_allowed(&spoofed));
+    }
+
+    #[test]
+    fn resolve_under_roots_allows_additional_dirs() {
+        let work = tempfile_dir("stitch-roots-work").canonicalize().unwrap();
+        let extra = tempfile_dir("stitch-roots-extra").canonicalize().unwrap();
+        let roots = vec![work.clone(), extra.clone()];
+        // 附加根内相对路径（按主目录解析后落入附加根）
+        let rel_in_extra = resolve_under_roots(&roots, "../stitch-roots-extra/notes.txt");
+        assert!(
+            rel_in_extra.is_err(),
+            "相对路径以主目录为基准，`..` 逃逸仍拒绝"
+        );
+        // 附加根内绝对路径
+        let abs =
+            resolve_under_roots(&roots, &extra.join("notes.txt").display().to_string()).unwrap();
+        assert_eq!(abs, extra.join("notes.txt"));
+        // 主根内相对路径照常
+        let main = resolve_under_roots(&roots, "main.txt").unwrap();
+        assert!(main.starts_with(&work));
+        // 附加根之外的绝对路径拒绝
+        let outside = tempfile_dir("stitch-roots-outside");
+        let err = resolve_under_roots(&roots, &outside.display().to_string()).unwrap_err();
+        assert!(err.to_string().contains("denied"));
+    }
+
+    #[test]
+    fn path_within_roots_matches_any_root() {
+        let work = PathBuf::from("C:/work/main");
+        let extra = PathBuf::from("C:/work/extra");
+        let roots = vec![work, extra];
+        assert!(path_within_roots("C:/work/main/src/a.rs", &roots));
+        assert!(path_within_roots("C:/work/extra/b.rs", &roots));
+        assert!(!path_within_roots("C:/work/other/c.rs", &roots));
+        assert!(!path_within_roots("../escape.txt", &roots));
+        // `..` 规范化后落回附加根内 → 允许（解析结果仍安全）
+        assert!(path_within_roots("C:/work/main/../extra/up.txt", &roots));
+        assert!(!path_within_roots(
+            "C:/work/main/../../elsewhere/x.rs",
+            &roots
+        ));
     }
 }

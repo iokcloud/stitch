@@ -2,13 +2,14 @@
 //!
 //! Deletes files or directories recursively. Requires user confirmation.
 
-use super::paths::resolve_under_work_dir;
-use super::{ToolDef, ToolResult};
+use super::paths::resolve_under_roots;
+use super::{ToolDef, ToolResult, extra_roots_impl};
 use std::path::PathBuf;
 
 #[derive(Clone)]
 pub struct DeletePath {
     work_dir: PathBuf,
+    extra_roots: Vec<PathBuf>,
 }
 
 impl Default for DeletePath {
@@ -21,6 +22,7 @@ impl DeletePath {
     pub fn new(work_dir: impl Into<PathBuf>) -> Self {
         Self {
             work_dir: work_dir.into(),
+            extra_roots: Vec::new(),
         }
     }
 
@@ -49,7 +51,7 @@ impl DeletePath {
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("Missing 'path' argument"))?;
 
-        let full_path = resolve_under_work_dir(&self.work_dir, raw_path)?;
+        let full_path = resolve_under_roots(&self.roots(), raw_path)?;
 
         if !full_path.exists() {
             return Ok(ToolResult::fail(format!("Path does not exist: {raw_path}")));
@@ -74,3 +76,4 @@ impl DeletePath {
         Ok(ToolResult::ok(format!("Deleted {kind}: {raw_path}")))
     }
 }
+extra_roots_impl!(DeletePath);

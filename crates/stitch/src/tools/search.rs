@@ -3,7 +3,7 @@
 //! Tries `rg` (ripgrep) first, falls back to `grep`, then to a built-in
 //! basic file walker for cross-platform support.
 
-use super::{ToolDef, ToolResult};
+use super::{ToolDef, ToolResult, extra_roots_impl};
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -20,12 +20,14 @@ const SOURCE_EXTS: &[&str] = &[
 #[derive(Clone)]
 pub struct GrepSearch {
     work_dir: PathBuf,
+    extra_roots: Vec<PathBuf>,
 }
 
 impl GrepSearch {
     pub fn new(work_dir: impl Into<PathBuf>) -> Self {
         Self {
             work_dir: work_dir.into(),
+            extra_roots: Vec::new(),
         }
     }
 
@@ -65,14 +67,17 @@ impl GrepSearch {
                 if scoped {
                     super::paths::resolve_scoped(&self.work_dir, p)?
                 } else {
-                    super::paths::resolve_under_work_dir(&self.work_dir, p)?
+                    super::paths::resolve_under_roots(&self.roots(), p)?
                 }
             }
-            _ => super::paths::resolve_under_work_dir(&self.work_dir, ".")?,
+            _ => super::paths::resolve_under_roots(&self.roots(), ".")?,
         };
 
+        // .stitchignore：rg 用 --ignore-file 遵守规则；内置 walker 手动跳过
+        let ignore = super::ignore::IgnoreRules::load(&self.work_dir);
+
         // Try ripgrep first (fastest)
-        if let Ok(output) = run_rg(&search_dir, pattern) {
+        if let Ok(output) = run_rg(&search_dir, pattern, &ignore) {
             return Ok(ToolResult {
                 metrics: None,
                 success: true,
@@ -90,7 +95,7 @@ impl GrepSearch {
         }
 
         // Last resort: built-in basic search
-        let output = basic_search(&search_dir, pattern);
+        let output = basic_search(&search_dir, pattern, &ignore, &self.work_dir);
         Ok(ToolResult {
             metrics: None,
             success: true,
@@ -99,7 +104,7 @@ impl GrepSearch {
     }
 }
 
-fn run_rg(dir: &PathBuf, pattern: &str) -> Result<String, ()> {
+fn run_rg(dir: &PathBuf, pattern: &str, ignore: &super::ignore::IgnoreRules) -> Result<String, ()> {
     let mut cmd = Command::new("rg");
     cmd.args([
         "--line-number",
@@ -107,8 +112,12 @@ fn run_rg(dir: &PathBuf, pattern: &str) -> Result<String, ()> {
         "--color=never",
         "-n",
         pattern,
-    ])
-    .arg(dir);
+    ]);
+    // .stitchignore：传给 rg 的 --ignore-file（rg 原生支持 gitignore 语法）
+    if !ignore.is_empty() {
+        cmd.args(["--ignore-file", &ignore.path_string()]);
+    }
+    cmd.arg(dir);
     super::process_win::hide_console_std(&mut cmd);
     let output = cmd.output().map_err(|_| ())?;
 
@@ -137,9 +146,14 @@ fn run_grep(dir: &PathBuf, pattern: &str) -> Result<String, ()> {
 }
 
 /// Basic file search using only std — walks common source files, does substring matching.
-fn basic_search(dir: &PathBuf, pattern: &str) -> String {
+fn basic_search(
+    dir: &PathBuf,
+    pattern: &str,
+    ignore: &super::ignore::IgnoreRules,
+    work_dir: &PathBuf,
+) -> String {
     let mut results: Vec<String> = Vec::new();
-    walk_dir(dir, dir, pattern, &mut results, 0);
+    walk_dir(dir, dir, pattern, &mut results, 0, ignore, work_dir);
     if results.is_empty() {
         "No matches found.".into()
     } else {
@@ -147,7 +161,15 @@ fn basic_search(dir: &PathBuf, pattern: &str) -> String {
     }
 }
 
-fn walk_dir(base: &PathBuf, dir: &PathBuf, pattern: &str, results: &mut Vec<String>, depth: usize) {
+fn walk_dir(
+    base: &PathBuf,
+    dir: &PathBuf,
+    pattern: &str,
+    results: &mut Vec<String>,
+    depth: usize,
+    ignore: &super::ignore::IgnoreRules,
+    work_dir: &PathBuf,
+) {
     if depth > 15 || results.len() >= MAX_OUTPUT_LINES {
         return;
     }
@@ -174,9 +196,14 @@ fn walk_dir(base: &PathBuf, dir: &PathBuf, pattern: &str, results: &mut Vec<Stri
         {
             continue;
         }
+        // .stitchignore：被忽略的目录不递归、文件不搜索（rel 相对 work_dir）
+        let rel = super::paths::display_rel_under_work_dir(work_dir, &path);
+        if ignore.is_ignored(&rel) {
+            continue;
+        }
 
         if path.is_dir() {
-            walk_dir(base, &path, pattern, results, depth + 1);
+            walk_dir(base, &path, pattern, results, depth + 1, ignore, work_dir);
         } else if is_source_file(&path)
             && let Ok(content) = std::fs::read_to_string(&path)
         {
@@ -212,3 +239,4 @@ fn truncate_lines(text: &str, max_lines: usize) -> String {
         )
     }
 }
+extra_roots_impl!(GrepSearch);

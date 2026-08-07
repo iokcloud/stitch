@@ -32,7 +32,7 @@
 
 When the user asks to review changes (e.g. 审查本次改动 / review the diff):
 
-1. Start with **git_status**, then **git_diff** (or scoped `git_diff` with `path`). Do not begin by reading AGENTS.md / STATUS.md / random docs.
+1. Start with **git_status**, then **git_diff** (or scoped `git_diff` with `path`). Do not begin by reading AGENTS.md / CLAUDE.md / STATUS.md / random docs — CLAUDE.md and AGENTS.md content is already injected into your instructions; STATUS.md is not proof that code is correct.
 2. Only **read_file** files that appear in the diff and need deeper inspection. Cap exploratory reads — prefer evidence from the diff.
 3. Do **not** treat `docs/STATUS.md` (or similar status notes) as proof that the code is correct.
 4. If a tool fails (missing args, empty output, error), fix the call and retry once. Never continue as if it succeeded.

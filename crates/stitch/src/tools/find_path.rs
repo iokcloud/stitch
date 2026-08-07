@@ -77,7 +77,16 @@ impl FindPath {
         let offset = arguments["offset"].as_u64().unwrap_or(0) as usize;
 
         let mut results: Vec<String> = Vec::new();
-        walk_and_match(&self.work_dir, &self.work_dir, pattern, &mut results, 0);
+        // .stitchignore：被忽略的目录不递归、文件不收录
+        let ignore = super::ignore::IgnoreRules::load(&self.work_dir);
+        walk_and_match(
+            &self.work_dir,
+            &self.work_dir,
+            pattern,
+            &mut results,
+            0,
+            &ignore,
+        );
 
         results.sort();
 
@@ -124,6 +133,7 @@ fn walk_and_match(
     pattern: &str,
     results: &mut Vec<String>,
     depth: usize,
+    ignore: &super::ignore::IgnoreRules,
 ) {
     if depth > 20 || results.len() >= MAX_RESULTS {
         return;
@@ -147,20 +157,26 @@ fn walk_and_match(
             continue;
         }
 
+        let rel = path
+            .strip_prefix(base)
+            .map(|p| p.to_string_lossy().replace('\\', "/"))
+            .unwrap_or_default();
+        // .stitchignore：被忽略的目录不递归、文件不收录
+        if ignore.is_ignored(&rel) {
+            continue;
+        }
+
         if path.is_dir() {
-            walk_and_match(base, &path, pattern, results, depth + 1);
-        } else {
-            let rel = path.strip_prefix(base).unwrap_or(&path);
-            let rel_str = rel.to_string_lossy().replace('\\', "/");
-            if glob_match(pattern, &rel_str) {
-                results.push(rel_str);
-            }
+            walk_and_match(base, &path, pattern, results, depth + 1, ignore);
+        } else if glob_match(pattern, &rel) {
+            results.push(rel);
         }
     }
 }
 
 /// Simple glob matching — supports * (any chars except /), ** (any chars including /), ? (single char).
-fn glob_match(pattern: &str, path: &str) -> bool {
+/// pub(crate)：.stitchignore 规则复用同一匹配器。
+pub(crate) fn glob_match(pattern: &str, path: &str) -> bool {
     // Strip leading ./ if present
     let pattern = pattern.strip_prefix("./").unwrap_or(pattern);
 

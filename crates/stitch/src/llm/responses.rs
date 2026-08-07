@@ -158,7 +158,14 @@ fn build_request<'a>(
         .to_ascii_lowercase()
         .contains("deepseek.com")
     {
-        Some(ReasoningConfig { effort: "none" })
+        // /think on 时开思考（费 token，用户主动选择）；默认 none 保持可预测
+        Some(ReasoningConfig {
+            effort: if super::thinking_enabled() {
+                "high"
+            } else {
+                "none"
+            },
+        })
     } else {
         None
     };
@@ -177,6 +184,7 @@ fn build_request<'a>(
 
 /// Responses SSE 事件类型常量。
 const EV_OUTPUT_TEXT_DELTA: &str = "response.output_text.delta";
+const EV_REASONING_SUMMARY_DELTA: &str = "response.reasoning_summary_text.delta";
 const EV_FN_ARGS_DELTA: &str = "response.function_call_arguments.delta";
 const EV_FN_ARGS_DONE: &str = "response.function_call_arguments.done";
 const EV_OUTPUT_ITEM_DONE: &str = "response.output_item.done";
@@ -276,6 +284,15 @@ fn handle_responses_event(
                 && !delta.is_empty()
             {
                 let _ = tx.send(StreamEvent::Token(delta));
+            }
+            None
+        }
+        EV_REASONING_SUMMARY_DELTA => {
+            // /think on 时 DeepSeek reasoning 摘要流（费 token，用户主动开）
+            if let Some(delta) = ev.delta
+                && !delta.is_empty()
+            {
+                let _ = tx.send(StreamEvent::Thinking(delta));
             }
             None
         }

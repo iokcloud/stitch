@@ -1,7 +1,7 @@
 //! Directory listing tool.
 
-use super::paths::{display_rel_under_work_dir, resolve_under_work_dir};
-use super::{ToolDef, ToolResult};
+use super::paths::{display_rel_under_work_dir, resolve_under_roots};
+use super::{ToolDef, ToolResult, extra_roots_impl};
 use std::path::PathBuf;
 
 /// Max entries before truncation.
@@ -10,12 +10,14 @@ const MAX_ENTRIES: usize = 100;
 #[derive(Clone)]
 pub struct ListDirectory {
     work_dir: PathBuf,
+    extra_roots: Vec<PathBuf>,
 }
 
 impl ListDirectory {
     pub fn new(work_dir: impl Into<PathBuf>) -> Self {
         Self {
             work_dir: work_dir.into(),
+            extra_roots: Vec::new(),
         }
     }
 
@@ -47,13 +49,16 @@ impl ListDirectory {
                 if scoped {
                     super::paths::resolve_scoped(&self.work_dir, p)?
                 } else {
-                    resolve_under_work_dir(&self.work_dir, p)?
+                    resolve_under_roots(&self.roots(), p)?
                 }
             }
-            _ => resolve_under_work_dir(&self.work_dir, ".")?,
+            _ => resolve_under_roots(&self.roots(), ".")?,
         };
 
         let mut entries: Vec<String> = Vec::new();
+        let mut skipped: usize = 0;
+        // .stitchignore：被忽略的条目不进清单
+        let ignore = super::ignore::IgnoreRules::load(&self.work_dir);
 
         let mut read_dir = match tokio::fs::read_dir(&target).await {
             Ok(d) => d,
@@ -72,6 +77,11 @@ impl ListDirectory {
 
             // Skip only `.` / `..` — keep `.agents` / `.cursor` visible to the agent.
             if name == "." || name == ".." {
+                continue;
+            }
+            let rel = super::paths::display_rel_under_work_dir(&self.work_dir, &path);
+            if ignore.is_ignored(&rel) {
+                skipped += 1;
                 continue;
             }
 
@@ -102,10 +112,18 @@ impl ListDirectory {
 
         let rel = display_rel_under_work_dir(&self.work_dir, &target);
 
-        if entries.is_empty() {
-            Ok(ToolResult::ok(format!("{rel}/ (empty)")))
+        let skip_note = if skipped > 0 {
+            format!("\n... {skipped} 项被 .stitchignore 忽略")
         } else {
-            Ok(ToolResult::ok(format!("{rel}/\n{}", entries.join("\n"))))
+            String::new()
+        };
+        if entries.is_empty() {
+            Ok(ToolResult::ok(format!("{rel}/ (empty){skip_note}")))
+        } else {
+            Ok(ToolResult::ok(format!(
+                "{rel}/\n{}{skip_note}",
+                entries.join("\n")
+            )))
         }
     }
 }
@@ -119,3 +137,4 @@ fn format_size(bytes: u64) -> String {
         format!("({:.1} MB)", bytes as f64 / (1024.0 * 1024.0))
     }
 }
+extra_roots_impl!(ListDirectory);

@@ -41,6 +41,9 @@ pub struct Manifest {
     pub estimated_tokens: usize,
     pub created_at: String,
     pub updated_at: String,
+    /// 自定义标题（stitch sessions rename 写入）；空 = 用第一条 user 消息智能提取。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
     /// Set when restore fell back to text-only UI history (diagnostic).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub restore_degraded: Option<String>,
@@ -58,6 +61,7 @@ impl Manifest {
             estimated_tokens: 0,
             created_at: now.clone(),
             updated_at: now,
+            title: None,
             restore_degraded: None,
         }
     }
@@ -580,7 +584,8 @@ pub fn append_messages(
     Ok(())
 }
 
-fn write_manifest(dir: &Path, manifest: &Manifest) -> anyhow::Result<()> {
+/// 原子写 manifest（会话管理：重命名标题等单点更新）。
+pub fn write_manifest(dir: &Path, manifest: &Manifest) -> anyhow::Result<()> {
     ensure_dir(dir)?;
     let tmp = dir.join("manifest.json.tmp");
     let final_path = manifest_path(dir);

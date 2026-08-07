@@ -151,6 +151,18 @@ pub struct StitchConfig {
     /// `enabled = false` to turn the describe layer off.
     #[serde(default)]
     pub local_vision: LocalVisionConfig,
+
+    /// 权限模式（default / accept_edits / plan / bypass），CLI 启动默认值。
+    #[serde(default)]
+    pub permission_mode: Option<String>,
+
+    /// deny 规则：禁用的工具名列表（始终生效，含 bypass）。
+    #[serde(default)]
+    pub disallowed_tools: Vec<String>,
+
+    /// statusLine：每回合结束执行的 shell 命令（stdout 显示为状态行）。
+    #[serde(default)]
+    pub statusline: Option<String>,
 }
 
 /// Local vision describe layer (DeepSeek + local VL as the "eyes").
@@ -300,6 +312,9 @@ impl Default for StitchConfig {
             max_iterations: default_max_iterations(),
             work_dir: None,
             sediment_visibility: default_sediment_visibility(),
+            permission_mode: None,
+            disallowed_tools: Vec::new(),
+            statusline: None,
         }
     }
 }
@@ -1031,9 +1046,36 @@ impl StitchConfig {
                     ),
                 };
             }
+            "statusline" => {
+                let s = value.trim();
+                self.statusline = if s.is_empty() {
+                    None
+                } else {
+                    Some(s.to_string())
+                };
+            }
+            "permission_mode" => {
+                let v = value.trim().to_ascii_lowercase();
+                if !["default", "accept_edits", "plan", "bypass"].contains(&v.as_str()) {
+                    anyhow::bail!(
+                        "permission_mode must be default / accept_edits / plan / bypass (got {value})"
+                    );
+                }
+                self.permission_mode = Some(v);
+            }
+            "disallowed_tools" => {
+                // 逗号分隔工具名；空串清空
+                self.disallowed_tools = value
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string)
+                    .collect();
+            }
             _ => anyhow::bail!(
                 "Unknown config key: {key}. Valid keys: api_base, api_token, llm_provider, \
-                 llm_api_base, llm_api_key, llm_model, max_iterations, work_dir, sediment_visibility"
+                 llm_api_base, llm_api_key, llm_model, max_iterations, work_dir, \
+                 sediment_visibility, statusline, permission_mode, disallowed_tools"
             ),
         }
         Ok(())
@@ -1058,9 +1100,13 @@ impl StitchConfig {
             "local_vision_model" => Ok(self.local_vision.model.clone()),
             "work_dir" => Ok(self.work_dir.clone().unwrap_or_default()),
             "sediment_visibility" => Ok(self.sediment_visibility.clone()),
+            "statusline" => Ok(self.statusline.clone().unwrap_or_default()),
+            "permission_mode" => Ok(self.permission_mode.clone().unwrap_or_default()),
+            "disallowed_tools" => Ok(self.disallowed_tools.join(", ")),
             _ => anyhow::bail!(
                 "Unknown config key: {key}. Valid keys: api_base, api_token, llm_provider, \
-                 llm_api_base, llm_api_key, llm_model, max_iterations, work_dir, sediment_visibility"
+                 llm_api_base, llm_api_key, llm_model, max_iterations, work_dir, \
+                 sediment_visibility, statusline, permission_mode, disallowed_tools"
             ),
         }
     }

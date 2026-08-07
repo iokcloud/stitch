@@ -44,6 +44,8 @@ pub struct AgentResult {
 pub enum AgentEvent {
     /// A text token from the model (for streaming display).
     Token { text: String },
+    /// 思考过程 token（/think on；浅色渲染，不写入会话消息）。
+    Thinking { text: String },
     /// A tool call has started executing.
     ToolStart {
         name: String,
@@ -68,6 +70,19 @@ pub enum AgentEvent {
         /// Per-tool benchmark metrics (duration_ms, …), mirror of ToolResult.metrics.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         metrics: Option<HashMap<String, f64>>,
+    },
+    /// 子代理委派开始（Task 工具执行前；内部事件随后原样转发）。
+    SubagentStart {
+        name: String,
+        description: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        tools: Vec<String>,
+    },
+    /// 子代理委派结束。
+    SubagentDone {
+        name: String,
+        success: bool,
+        summary: String,
     },
     /// The agent is requesting confirmation before executing a tool.
     ConfirmRequest {
@@ -282,8 +297,9 @@ impl<'a> ReactRenderer for DesktopRenderer<'a> {
 }
 
 /// 单一核心 ReAct 循环（CLI 与桌面共用——差异经 ReactRenderer 注入）。
+/// `pub(crate)`：Task 工具（子代理委派）用它跑子代理循环。
 #[allow(clippy::too_many_arguments)]
-async fn run_react_core<R: ReactRenderer>(
+pub(crate) async fn run_react_core<R: ReactRenderer>(
     session: &mut Session,
     api_base: &str,
     model: &str,
@@ -335,29 +351,34 @@ async fn run_react_core<R: ReactRenderer>(
 
         // Hard compact (~85%): sync; prefer ready soft candidate as draft.
         if est > hard_lim {
-            if let Some(cand) = soft_state.take_ready(session.epoch) {
-                compacted =
-                    context::apply_compact_with_summary(session, &cand.summary, keep_recent);
+            // PreCompact hook：压缩前拦截（拒绝则本轮不压缩，Claude Code 语义）
+            let blocked =
+                crate::hooks::pre_compact_blocked(work_dir, session.messages.len(), est).await;
+            if blocked.is_none() {
+                if let Some(cand) = soft_state.take_ready(session.epoch) {
+                    compacted =
+                        context::apply_compact_with_summary(session, &cand.summary, keep_recent);
+                }
+                soft_state.invalidate();
+                if !compacted {
+                    compacted = context::maybe_compact_llm(
+                        session,
+                        &context::ContextConfig {
+                            max_tokens: hard_lim,
+                            keep_recent,
+                        },
+                        Some(context::CompactLlm {
+                            api_base,
+                            model,
+                            api_key,
+                        }),
+                    )
+                    .await;
+                }
+                // Epoch may have bumped — rewrite + checkpoint on disk now so a
+                // crash does not strand the compacted state only in memory.
+                renderer.flush_turn(session);
             }
-            soft_state.invalidate();
-            if !compacted {
-                compacted = context::maybe_compact_llm(
-                    session,
-                    &context::ContextConfig {
-                        max_tokens: hard_lim,
-                        keep_recent,
-                    },
-                    Some(context::CompactLlm {
-                        api_base,
-                        model,
-                        api_key,
-                    }),
-                )
-                .await;
-            }
-            // Epoch may have bumped — rewrite + checkpoint on disk now so a
-            // crash does not strand the compacted state only in memory.
-            renderer.flush_turn(session);
         }
 
         // Defensive: DeepSeek-strict pairing / no consecutive assistants.
@@ -942,6 +963,10 @@ async fn collect_stream_events<R: ReactRenderer>(
                         renderer.on_interim_text(&t);
                         renderer.on_event(AgentEvent::Token { text: t });
                     }
+                    Some(StreamEvent::Thinking(t)) => {
+                        // 思考只透传显示（/think on），不入会话文本
+                        renderer.on_event(AgentEvent::Thinking { text: t });
+                    }
                     Some(StreamEvent::ToolCall {
                         id,
                         name,
@@ -1177,7 +1202,21 @@ async fn execute_tool_with_renderer<R: ReactRenderer>(
     // `__stitch_scoped` is re-injected below only after approval / rule match.
     let args = tools::scrub_scoped_marker(&raw_args);
     let outside = tool.scoped_read_target(&args, work_dir);
-    let needs = renderer.needs_confirmation(tool, &args, work_dir);
+
+    // ── 权限模式 + deny 规则裁决（Claude Code 语义）──
+    // deny 规则始终生效（含 bypass）；模式放行则跳过确认；Ask 走现有确认门。
+    let exec_direct = match crate::permission::adjudicate(&tc.name) {
+        crate::permission::Verdict::Deny(reason) => {
+            return serde_json::json!({
+                "cancelled": true,
+                "message": format!("denied by permission rules: {reason}"),
+            });
+        }
+        crate::permission::Verdict::Allow => true,
+        crate::permission::Verdict::Ask => false,
+    };
+
+    let needs = !exec_direct && renderer.needs_confirmation(tool, &args, work_dir);
     let mut exec_args = args;
 
     if needs {
@@ -1200,6 +1239,25 @@ Allow?",
         exec_args[crate::allow::SCOPED_MARKER] = serde_json::json!(true);
     }
 
+    // ── Hooks：PreToolUse（确认门之后、执行之前；block 则拒绝执行）──
+    let hooks = crate::hooks::HookRegistry::load(work_dir);
+    if hooks.has(crate::hooks::HookEvent::PreToolUse) {
+        let outcome = hooks
+            .run(
+                crate::hooks::HookEvent::PreToolUse,
+                work_dir.unwrap_or(""),
+                &exec_args,
+                Some(&tc.name),
+            )
+            .await;
+        if let Some(reason) = outcome.blocked {
+            return serde_json::json!({
+                "cancelled": true,
+                "message": format!("blocked by PreToolUse hook: {reason}"),
+            });
+        }
+    }
+
     // ADR-037 直播输出：run_command 逐行经转发任务推 ToolOutput 事件。
     let (prog_tx, mut prog_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
     if let Some(fwd_tx) = renderer.event_tx_clone() {
@@ -1219,15 +1277,37 @@ Allow?",
     }
 
     let cancel_flag = renderer.tool_cancel_flag();
-    match tool
-        .execute_with_progress(exec_args, Some(prog_tx), cancel_flag)
+    let result_json = match tool
+        .execute_with_progress(exec_args.clone(), Some(prog_tx), cancel_flag)
         .await
     {
         // 完整序列化（含 metrics——旧 confirm gate 手写 {success, output}
         // 曾静默丢弃 benchmark 指标，回归测试 tool_result_json_keeps_metrics 兜底）。
         Ok(result) => serde_json::to_value(&result).unwrap_or_default(),
         Err(e) => serde_json::json!({"error": format!("{e:#}")}),
+    };
+
+    // ── Hooks：PostToolUse（执行之后，结果随事件送达；block 仅记录）──
+    if hooks.has(crate::hooks::HookEvent::PostToolUse) {
+        let mut tool_input = exec_args;
+        // 内部 scoped 标记不泄漏给用户 hook
+        tool_input
+            .as_object_mut()
+            .map(|m| m.remove(crate::allow::SCOPED_MARKER));
+        let outcome = hooks
+            .run(
+                crate::hooks::HookEvent::PostToolUse,
+                work_dir.unwrap_or(""),
+                &serde_json::json!({ "tool_input": tool_input, "tool_response": result_json }),
+                Some(&tc.name),
+            )
+            .await;
+        if let Some(reason) = outcome.blocked {
+            tracing::warn!(%reason, "PostToolUse hook blocked after execution");
+        }
     }
+
+    result_json
 }
 
 #[cfg(test)]

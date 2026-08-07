@@ -494,6 +494,7 @@ pub async fn generate_plan(
     while let Some(event) = rx.recv().await {
         match event {
             StreamEvent::Token(t) => text.push_str(&t),
+            StreamEvent::Thinking(_) => {} // plan 生成不计思考
             StreamEvent::ToolCall { .. } => {}
             StreamEvent::Usage { .. } => {} // plan 生成不计成本
             StreamEvent::Done => break,

@@ -11,12 +11,15 @@ pub mod vision;
 pub use responses::{LlmProtocol, resolve_protocol};
 
 use crate::session::Message;
+use std::sync::Mutex;
 
 /// A token emitted during streaming generation.
 #[derive(Debug, Clone)]
 pub enum StreamEvent {
     /// A text token from the model.
     Token(String),
+    /// 思考过程 token（/think on 时 DeepSeek V4 reasoning_content 流）。
+    Thinking(String),
     /// A complete tool call request (accumulated from streaming deltas).
     ToolCall {
         id: String,
@@ -129,14 +132,36 @@ struct ThinkingMode {
     kind: &'static str,
 }
 
+/// 思考过程开关（/think on|off，进程级单例；默认关——agent 工具循环保持可预测）。
+static THINKING_ENABLED: std::sync::LazyLock<Mutex<bool>> =
+    std::sync::LazyLock::new(|| Mutex::new(false));
+
+/// 设置思考开关（CLI /think 会话内切换；测试隔离用 clear 配合串行锁）。
+pub fn set_thinking(enabled: bool) {
+    if let Ok(mut g) = THINKING_ENABLED.lock() {
+        *g = enabled;
+    }
+}
+
+/// 思考开关只读快照。
+pub fn thinking_enabled() -> bool {
+    THINKING_ENABLED.lock().map(|g| *g).unwrap_or(false)
+}
+
 fn deepseek_thinking_for(api_base: &str, model: &str) -> Option<ThinkingMode> {
     let base = api_base.to_ascii_lowercase();
     if !base.contains("deepseek.com") && !model.starts_with("deepseek-") {
         return None;
     }
-    // V4 defaults thinking on; agent/tool loops stay predictable with it off.
-    let _ = model;
-    Some(ThinkingMode { kind: "disabled" })
+    // V4 defaults thinking on; agent/tool loops stay predictable with it off
+    // (until the user explicitly turns it on via /think).
+    Some(ThinkingMode {
+        kind: if thinking_enabled() {
+            "enabled"
+        } else {
+            "disabled"
+        },
+    })
 }
 
 #[derive(Deserialize)]
@@ -172,6 +197,9 @@ struct ChoiceDelta {
 struct DeltaContent {
     #[serde(default)]
     content: Option<String>,
+    /// DeepSeek V4 thinking 模式：reasoning_content 单独成流（与 content 互斥）。
+    #[serde(default)]
+    reasoning_content: Option<String>,
     #[serde(default)]
     tool_calls: Option<Vec<ToolCallDelta>>,
 }
@@ -432,6 +460,13 @@ async fn process_sse_stream(
                             let _ = tx.send(StreamEvent::Token(content));
                         }
 
+                        // Handle thinking content (/think on; reasoning_content 流)
+                        if let Some(reasoning) = delta.reasoning_content
+                            && !reasoning.is_empty()
+                        {
+                            let _ = tx.send(StreamEvent::Thinking(reasoning));
+                        }
+
                         // Handle tool call deltas
                         if let Some(tc_deltas) = delta.tool_calls {
                             for tc in tc_deltas {
@@ -487,6 +522,11 @@ async fn process_sse_stream(
                 {
                     let _ = tx.send(StreamEvent::Token(content));
                 }
+                if let Some(reasoning) = choice.delta.reasoning_content
+                    && !reasoning.is_empty()
+                {
+                    let _ = tx.send(StreamEvent::Thinking(reasoning));
+                }
             }
         }
     }
@@ -506,7 +546,52 @@ async fn process_sse_stream(
 
 #[cfg(test)]
 mod tests {
-    use super::{classify_api_error, is_retryable_status};
+    use super::{
+        ChatStreamChunk, Mutex, classify_api_error, deepseek_thinking_for, is_retryable_status,
+        set_thinking, thinking_enabled,
+    };
+
+    /// 思考开关是进程级单例：测试串行（permission.rs 同模式）。
+    fn lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: Mutex<()> = Mutex::new(());
+        LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    #[test]
+    fn thinking_switch_defaults_off_and_toggles() {
+        let _g = lock();
+        set_thinking(false);
+        assert!(!thinking_enabled());
+        // deepseek 请求标志跟随开关
+        assert_eq!(
+            deepseek_thinking_for("https://api.deepseek.com", "deepseek-v4-flash")
+                .expect("deepseek 应注入 thinking 标志")
+                .kind,
+            "disabled"
+        );
+        set_thinking(true);
+        assert!(thinking_enabled());
+        assert_eq!(
+            deepseek_thinking_for("https://api.deepseek.com", "deepseek-v4-flash")
+                .expect("deepseek 应注入 thinking 标志")
+                .kind,
+            "enabled"
+        );
+        // 非 deepseek 不注入 thinking 标志
+        assert!(deepseek_thinking_for("https://example.com", "gpt-4o").is_none());
+        set_thinking(false);
+    }
+
+    #[test]
+    fn chat_delta_parses_reasoning_content() {
+        // DeepSeek V4 thinking 模式：reasoning_content 独立字段
+        let chunk: ChatStreamChunk =
+            serde_json::from_str(r#"{"choices":[{"delta":{"reasoning_content":"先看代码"}}]}"#)
+                .expect("parse");
+        let delta = &chunk.choices[0].delta;
+        assert_eq!(delta.reasoning_content.as_deref(), Some("先看代码"));
+        assert_eq!(delta.content.as_deref(), None);
+    }
 
     #[test]
     fn auth_error_friendly_and_not_retryable() {
