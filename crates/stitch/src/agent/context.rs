@@ -495,6 +495,8 @@ async fn llm_rewrite_summary(draft: &str, creds: CompactLlm<'_>) -> anyhow::Resu
         messages,
         max_tokens: 1024,
         tools: None,
+        temperature: None,
+        top_p: None,
     };
     let out = tokio::time::timeout(std::time::Duration::from_secs(40), llm::complete_chat(req))
         .await

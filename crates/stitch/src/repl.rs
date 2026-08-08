@@ -6,6 +6,9 @@
 //! - Ctrl+C 中断当前回合（ctrlc → cancel_flag）；空闲时退出
 //! - 会话持久化：`{work_dir}/.stitch/sessions/{id}/`（复用 persist 机制）
 //! - 流式 Markdown 渲染（复用 render 层）
+//! - 输入框（Claude Code 式）：顶边信息行（✳ 模型 · 权限 · 上下文% · 分支右对齐）、
+//!   左框线提示符 `│ ❯ 目录`、回合收尾底边右对齐 statusline
+//! - 输入高亮细分（/ 命令名青参数灰 · ! 黄 · @ 青）+ fish 式灰提示（slash 续尾 / 历史）
 
 use crate::agent::{self, AgentEvent};
 use crate::config::StitchConfig;
@@ -62,6 +65,7 @@ enum SlashAction {
     Search(String),
     Think(Vec<String>),
     Init,
+    Skill(Vec<String>),
     Help,
     /// 自定义 slash 命令（.claude/commands/*.md）：(命令名, 参数)
     Custom(String, String),
@@ -157,6 +161,7 @@ fn parse_slash(line: &str) -> SlashAction {
         "/search" => SlashAction::Search(rest),
         "/think" => SlashAction::Think(rest.split_whitespace().map(str::to_string).collect()),
         "/init" => SlashAction::Init,
+        "/skill" => SlashAction::Skill(rest.split_whitespace().map(str::to_string).collect()),
         _ => {
             let name = cmd.trim_start_matches('/');
             if name.is_empty() {
@@ -204,6 +209,7 @@ const BUILTIN_SLASHES: &[&str] = &[
     "/statusline",
     "/search",
     "/init",
+    "/skill",
 ];
 
 /// rustyline 补全器：`/` 前缀补全 slash 命令（内置 + 自定义），
@@ -277,17 +283,55 @@ impl rustyline::completion::Completer for StitchCompleter {
 impl rustyline::Helper for StitchCompleter {}
 impl rustyline::hint::Hinter for StitchCompleter {
     type Hint = String;
-    fn hint(&self, _line: &str, _pos: usize, _ctx: &rustyline::Context<'_>) -> Option<String> {
+    /// fish 式打字提示（灰色显示，见 highlight_hint）：
+    /// - `/` 开头：首个匹配命令的续尾（内置 + 自定义，BUILTIN 顺序）
+    /// - 其他：委托 rustyline HistoryHinter（历史相似条目续尾，右箭头可接受）
+    fn hint(&self, line: &str, pos: usize, ctx: &rustyline::Context<'_>) -> Option<String> {
+        if line.starts_with('/') && pos >= line.len() {
+            let mut first: Option<String> = None;
+            for cand in BUILTIN_SLASHES.iter().map(|s| s.to_string()).chain(
+                crate::commands::load_commands(Some(&self.work_dir))
+                    .into_iter()
+                    .map(|c| format!("/{}", c.name)),
+            ) {
+                if cand.len() > line.len() && cand.starts_with(line) && first.is_none() {
+                    first = Some(cand);
+                }
+            }
+            return first.map(|full| full[line.len()..].to_string());
+        }
+        if pos >= line.len() {
+            return rustyline::hint::HistoryHinter::new().hint(line, pos, ctx);
+        }
         None
     }
 }
 impl rustyline::highlight::Highlighter for StitchCompleter {
-    /// 输入高亮：/ 开头的 slash 命令整段青色（rustyline 官方 colored 示例模式）。
+    /// 输入高亮（rustyline colored 示例模式，ANSI 分段内联；C0 控制字符
+    /// 先剥离——0.5.4 渲染层注入防护同款）：
+    /// - `/cmd 参数`：命令名青色加粗、参数灰（一眼区分命令与参数）
+    /// - `!命令`：黄色加粗（shell 快捷执行）
+    /// - `@文件`：青色加粗（文件引用嵌入）
     fn highlight<'l>(&self, line: &'l str, _pos: usize) -> std::borrow::Cow<'l, str> {
-        if line.starts_with('/') {
-            std::borrow::Cow::Owned(format!("\x1b[1;36m{line}\x1b[0m"))
-        } else {
+        let clean = crate::render::markdown::strip_control(line);
+        let clean = clean.as_ref();
+        if clean.starts_with('/') {
+            // split_once 会吞掉分隔符本身，灰段前补一个空格还原视觉间距
+            let (cmd, rest) = clean.split_once(char::is_whitespace).unwrap_or((clean, ""));
+            let out = if rest.is_empty() {
+                format!("\x1b[1;36m{cmd}\x1b[0m")
+            } else {
+                format!("\x1b[1;36m{cmd}\x1b[0m\x1b[90m {rest}\x1b[0m")
+            };
+            std::borrow::Cow::Owned(out)
+        } else if clean.starts_with('!') {
+            std::borrow::Cow::Owned(format!("\x1b[1;33m{clean}\x1b[0m"))
+        } else if clean.starts_with('@') && !clean.starts_with("@@") {
+            std::borrow::Cow::Owned(format!("\x1b[1;36m{clean}\x1b[0m"))
+        } else if std::ptr::eq(clean, line) {
             std::borrow::Cow::Borrowed(line)
+        } else {
+            std::borrow::Cow::Owned(clean.to_string())
         }
     }
 
@@ -297,7 +341,12 @@ impl rustyline::highlight::Highlighter for StitchCompleter {
         _pos: usize,
         _kind: rustyline::highlight::CmdKind,
     ) -> bool {
-        true // 全行样式由 highlight() 控制
+        true // 全行样式由 highlight() 分段控制
+    }
+
+    /// 提示（Hinter）灰显：fish 式观感，与全局灰调一致。
+    fn highlight_hint<'h>(&self, hint: &'h str) -> std::borrow::Cow<'h, str> {
+        std::borrow::Cow::Owned(format!("\x1b[90m{hint}\x1b[0m"))
     }
 }
 impl rustyline::validate::Validator for StitchCompleter {}
@@ -809,6 +858,11 @@ pub async fn run_chat(
     // 会话级任务清单：TodoWrite 工具 + /todo 命令 + 回合进度行共用
     let todo_store = Arc::new(Mutex::new(tools::todo::TodoStore::new()));
     let mut tools = tools::build_registry_with_todo(&work_dir, &extra_roots, todo_store.clone());
+    // MCP 工具接入：enabled 服务器（config + --mcp-config 外部合并）发现工具
+    // 挂进注册表（连接失败静默跳过，不阻塞会话启动）
+    let mcp_servers = crate::mcp_protocol::effective_servers(&cfg.mcp_servers);
+    let mcp_tools = crate::mcp_protocol::discover_enabled(&mcp_servers).await;
+    tools.attach_mcp_tools(&mcp_tools, &mcp_servers);
     let sub_ctx = tools::build_subagent_ctx(
         &cfg.llm_api_base,
         &cfg.llm_model,
@@ -843,8 +897,8 @@ pub async fn run_chat(
         forked_note = Some(format!("{src_id} → {session_id}（保留 {cut} 条消息）"));
         (s, true)
     } else {
-        session_id = if let Some(id) = resume {
-            id
+        session_id = if let Some(ref id) = resume {
+            id.clone()
         } else if continue_last {
             list_sessions(&work_dir)
                 .into_iter()
@@ -862,6 +916,10 @@ pub async fn run_chat(
             Ok(Some((s, m))) => {
                 manifest = m;
                 (s, true)
+            }
+            _ if resume.is_some() => {
+                // 用户明确给了 id（--resume <id> / --session-id）：不存在即报错
+                anyhow::bail!("会话不存在：{session_id}（stitch sessions 查看）");
             }
             _ => {
                 let mut system_prompt = agent::prompt::build_system_prompt(&work_dir, &tools);
@@ -893,6 +951,8 @@ pub async fn run_chat(
     let mut last_failed: Option<String> = None;
     // 草稿模式（/draft）：文件改动只预览不落盘（回合结束自动回滚）
     let mut draft_mode = false;
+    // 当前激活的 Skill 名（/skill <名称> 加载，off 清除）
+    let mut active_skill: Option<String> = None;
 
     // ── 终端交互 ──
     println!("{}", banner(env!("CARGO_PKG_VERSION")));
@@ -975,7 +1035,26 @@ pub async fn run_chat(
             println!("\n[退出]");
             break;
         }
-        // 提示符：❯ + 目录短名 + 模型（Claude Code 式信息密度）。
+        // 输入框顶边（Claude Code 式）：✳ 模型 · 权限模式 · 上下文占用% · 分支，
+        // 每轮输入前实时刷新（模型/权限/上下文都可能变化）
+        let pc = crate::permission::current();
+        let ctx_pct = {
+            let limit = agent::tokens::context_limit_for_model(&model);
+            let est = agent::tokens::estimate_messages(&session.messages);
+            est.saturating_mul(100).checked_div(limit).unwrap_or(0)
+        };
+        let branch = git_branch_short(&work_dir);
+        println!(
+            "{}",
+            input_box_top(
+                &model,
+                pc.mode.as_str(),
+                ctx_pct,
+                branch.as_deref(),
+                term_width()
+            )
+        );
+        // 提示符：左框线 │ + ❯ + 目录短名（模型/权限/上下文已上移到输入框顶边）。
         // rustyline 用 raw 算宽度（Windows 无法解析 ANSI 转义），styled 上屏渲染
         // —— 二者显示宽度必须一致，否则光标位置偏移。
         let dir_short = work_dir
@@ -983,7 +1062,7 @@ pub async fn run_chat(
             .next()
             .filter(|s| !s.is_empty())
             .unwrap_or(&work_dir);
-        let (raw_prompt, styled_prompt) = build_prompt(dir_short, &model);
+        let (raw_prompt, styled_prompt) = build_prompt(dir_short);
         match rl.readline(&(raw_prompt.as_str(), styled_prompt.as_str())) {
             Ok(line) => {
                 let _ = rl.add_history_entry(line.as_str());
@@ -999,7 +1078,9 @@ pub async fn run_chat(
                     );
                     let mut cancelled = false;
                     loop {
-                        match rl.readline(&("… ", "\x1b[1;36m… \x1b[0m")) {
+                        // 续行提示符带左框线（与输入框一体）
+                        match rl.readline(&("│ … ", "\x1b[90m│\x1b[0m \x1b[1;36m…\x1b[0m "))
+                        {
                             Ok(l) => {
                                 if l.trim() == "}" {
                                     break;
@@ -1168,10 +1249,12 @@ pub async fn run_chat(
                             let first = it.next().map(String::as_str).unwrap_or("");
                             match first {
                                 "" => {
-                                    println!(
-                                        "  [状态行] 当前：{}",
-                                        cfg.statusline.as_deref().unwrap_or("（未设置）")
-                                    );
+                                    let cur = crate::statusline::resolved(
+                                        settings.statusline.as_deref(),
+                                        cfg.statusline.as_deref(),
+                                    )
+                                    .unwrap_or_else(|| "（未设置）".into());
+                                    println!("  [状态行] 当前：{cur}");
                                     println!(
                                         "  用法：/statusline clear 清除 · /statusline set <shell 命令> 自定义"
                                     );
@@ -1436,8 +1519,9 @@ pub async fn run_chat(
                         SlashAction::Mcp(args) => {
                             let args = args.trim();
                             if args.is_empty() {
-                                // 健康视图：逐个连接 enabled 服务器
-                                let servers = cfg.enabled_mcp_servers();
+                                // 健康视图：逐个连接生效服务器（config + 外部合并）
+                                let servers =
+                                    crate::mcp_protocol::effective_servers(&cfg.mcp_servers);
                                 if servers.is_empty() {
                                     println!(
                                         "  MCP 服务器：无（/mcp add <名称> <命令> 或 <名称> --url <端点> 添加）"
@@ -1447,7 +1531,7 @@ pub async fn run_chat(
                                     for p in servers {
                                         let url =
                                             p.url.as_deref().or(p.command.as_deref()).unwrap_or("");
-                                        match crate::mcp_protocol::list_tools(p).await {
+                                        match crate::mcp_protocol::list_tools(&p).await {
                                             Ok(tools) => println!(
                                                 "    \x1b[32m✓\x1b[0m {} — {}（{} 工具）",
                                                 p.label,
@@ -1611,11 +1695,11 @@ pub async fn run_chat(
                             let ws_hooks = std::path::Path::new(&work_dir)
                                 .join(".stitch")
                                 .join("hooks.json");
-                            let st = settings
-                                .statusline
-                                .as_deref()
-                                .or(cfg.statusline.as_deref())
-                                .unwrap_or("（未配置）");
+                            let st = crate::statusline::resolved(
+                                settings.statusline.as_deref(),
+                                cfg.statusline.as_deref(),
+                            )
+                            .unwrap_or_else(|| "（未配置）".into());
                             println!("  当前配置：");
                             println!("    模型：{model}");
                             println!("    API：{}", cfg.llm_api_base);
@@ -1789,6 +1873,91 @@ pub async fn run_chat(
                                     }
                                 }
                                 _ => println!("  用法：/profile [编号或 id]"),
+                            }
+                        }
+                        SlashAction::Skill(args) => {
+                            let skill_dir = PathBuf::from(&work_dir).join(".agents").join("skills");
+                            match args.as_slice() {
+                                [] => {
+                                    // 列表 + 当前激活
+                                    println!(
+                                        "  已加载 Skill：{}",
+                                        active_skill
+                                            .as_deref()
+                                            .unwrap_or("（无，/skill <名称> 加载）")
+                                    );
+                                    let mut names: Vec<String> = Vec::new();
+                                    if let Ok(rd) = std::fs::read_dir(&skill_dir) {
+                                        for e in rd.flatten() {
+                                            if e.path().join("SKILL.md").is_file() {
+                                                names.push(
+                                                    e.file_name().to_string_lossy().into_owned(),
+                                                );
+                                            }
+                                        }
+                                    }
+                                    names.sort();
+                                    if names.is_empty() {
+                                        println!(
+                                            "  可用 Skill：无（.agents/skills/ 下放 SKILL.md，或让模型 save_skill 沉淀）"
+                                        );
+                                    } else {
+                                        println!(
+                                            "  可用 Skill（{}）：{}",
+                                            names.len(),
+                                            names.join(" · ")
+                                        );
+                                    }
+                                }
+                                [name] if name == "off" => {
+                                    let base =
+                                        agent::prompt::build_system_prompt(&work_dir, &tools);
+                                    let mut sp = base;
+                                    agent::prompt::append_additional_dirs(&mut sp, &extra_roots);
+                                    session.messages[0].content = session::Content::Text(sp);
+                                    active_skill = None;
+                                    println!("  [skill] 已清除（系统提示恢复默认）");
+                                }
+                                [name] => {
+                                    // slug 校验：仅字母数字下划线连字符，防路径穿越
+                                    if !name
+                                        .chars()
+                                        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+                                    {
+                                        println!("  [skill] 非法名称（仅字母/数字/_/-）");
+                                        continue;
+                                    }
+                                    let path = skill_dir.join(name).join("SKILL.md");
+                                    match std::fs::read_to_string(&path) {
+                                        Ok(content) => {
+                                            let with_skill =
+                                                agent::prompt::build_system_prompt_with_skill(
+                                                    &work_dir,
+                                                    &tools,
+                                                    Some(&content),
+                                                );
+                                            let mut sp = with_skill;
+                                            agent::prompt::append_additional_dirs(
+                                                &mut sp,
+                                                &extra_roots,
+                                            );
+                                            session.messages[0].content =
+                                                session::Content::Text(sp);
+                                            active_skill = Some(name.clone());
+                                            println!(
+                                                "  [skill] 已加载「{name}」（系统提示注入 Active Skill 段）"
+                                            );
+                                        }
+                                        Err(_) => {
+                                            println!(
+                                                "  [skill] 未找到 Skill「{name}」（.agents/skills/{name}/SKILL.md，/skill 查看列表）"
+                                            );
+                                        }
+                                    }
+                                }
+                                _ => println!(
+                                    "  用法：/skill <名称> 加载 · /skill off 清除 · /skill 列表"
+                                ),
                             }
                         }
                         SlashAction::Review => {
@@ -2141,6 +2310,8 @@ pub async fn run_chat(
                     let _ = std::io::stdout().flush();
                 }
                 crate::render::finish_stream();
+                // 中断标注：Ctrl+C 置位过 → 回合框线补「已中断」
+                let interrupted = cancel_flag.load(Ordering::SeqCst);
                 cancel_flag.store(false, Ordering::SeqCst);
 
                 // 回合结束拿回 session（spawn 内 move 出去的）
@@ -2178,16 +2349,17 @@ pub async fn run_chat(
 
                 let elapsed = turn_started.elapsed().as_secs_f64();
                 turn_durations.push(elapsed);
+                let interrupted_hint = if interrupted { " · 已中断" } else { "" };
                 if let Some(cost) = turn_cost {
                     total_cost += cost;
                     println!(
                         "
-\x1b[90m╰─ 回合 {turn_count} · {elapsed:.1}s · 成本 ¥{cost:.4}\x1b[0m"
+\x1b[90m╰─ 回合 {turn_count} · {elapsed:.1}s · 成本 ¥{cost:.4}{interrupted_hint}\x1b[0m"
                     );
                 } else {
                     println!(
                         "
-\x1b[90m╰─ 回合 {turn_count} · {elapsed:.1}s\x1b[0m"
+\x1b[90m╰─ 回合 {turn_count} · {elapsed:.1}s{interrupted_hint}\x1b[0m"
                     );
                 }
                 // --max-turns 最大回合数：达到上限自动停（防自动模式跑飞）
@@ -2235,15 +2407,16 @@ pub async fn run_chat(
                         store.list().len()
                     );
                 }
-                // statusLine：settings/statusline 覆盖 config（失败静默）
-                let statusline = match settings.statusline.as_deref().or(cfg.statusline.as_deref())
-                {
-                    Some(cmd) => crate::statusline::run(cmd).await,
+                // statusLine：--setting > settings.json > config（失败静默）——
+                // 右对齐进输入框底边（Claude Code 式，替代独立 ▌ 行）
+                let statusline = match crate::statusline::resolved(
+                    settings.statusline.as_deref(),
+                    cfg.statusline.as_deref(),
+                ) {
+                    Some(cmd) => crate::statusline::run(&cmd).await,
                     None => None,
                 };
-                if let Some(text) = statusline {
-                    println!("[36m▌ {text}[0m");
-                }
+                println!("{}", input_box_bottom(statusline.as_deref(), term_width()));
             }
 
             Err(rustyline::error::ReadlineError::Interrupted) => {
@@ -2456,10 +2629,167 @@ fn markdown_strip_control(s: &str) -> std::borrow::Cow<'_, str> {
     crate::render::markdown::strip_control(s)
 }
 
-fn build_prompt(dir_short: &str, model: &str) -> (String, String) {
-    let raw = format!("❯ {dir_short} {model} ");
-    let styled = format!("\x1b[1;36m❯\x1b[0m \x1b[90m{dir_short}\x1b[0m \x1b[1;36m{model}\x1b[0m ");
+/// 输入提示符：左框线 │ + ❯ + 目录短名（模型/权限/上下文已上移到输入框顶边）。
+/// raw 无 ANSI（rustyline 用 raw 算光标宽度，Windows 无法解析转义），
+/// styled 上屏渲染，剥色后必须与 raw 一致。
+fn build_prompt(dir_short: &str) -> (String, String) {
+    let raw = format!("│ ❯ {dir_short} ");
+    let styled = format!("\x1b[90m│\x1b[0m \x1b[1;36m❯\x1b[0m \x1b[90m{dir_short}\x1b[0m ");
     (raw, styled)
+}
+
+/// 终端当前宽度（列）；非 TTY 或查询失败回退 80。
+fn term_width() -> u16 {
+    if !std::io::stdout().is_terminal() {
+        return 80;
+    }
+    crossterm::terminal::size().map(|(w, _)| w).unwrap_or(80)
+}
+
+/// 剥除 ANSI 转义序列（CSI / OSC / 两字符序列），返回纯文本。宽度计算用。
+fn strip_ansi_codes(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars();
+    while let Some(c) = chars.next() {
+        if c == '\x1b' {
+            match chars.next() {
+                Some('[') => {
+                    // CSI：跳到终止符（0x40–0x7E）
+                    for c2 in chars.by_ref() {
+                        if ('\x40'..='\x7e').contains(&c2) {
+                            break;
+                        }
+                    }
+                }
+                Some(']') => {
+                    // OSC：到 BEL 或 ESC \ 结束
+                    for c2 in chars.by_ref() {
+                        if c2 == '\x07' || (c2 == '\x1b') {
+                            if c2 == '\x1b' {
+                                chars.next(); // 吞掉 \
+                            }
+                            break;
+                        }
+                    }
+                }
+                Some(_) => {} // 两字符序列（ESC X）：跳过
+                None => break,
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// 显示宽度：剥 ANSI 后按 unicode-width 计（CJK 双宽，statusline/分支右对齐用）。
+fn display_width(s: &str) -> usize {
+    use unicode_width::UnicodeWidthStr;
+    UnicodeWidthStr::width(strip_ansi_codes(s).as_str())
+}
+
+/// 输入框顶边（Claude Code 式信息行）：`╭─ ✳ 模型 · 权限 · 上下文% ── 分支 ─╮`
+///
+/// - 边框灰调（90）；✳ 与模型青色加粗；上下文百分比按占用着色：
+///   <60% 默认 · 60–80% 黄 · ≥80% 红（压缩预警）
+/// - 分支右对齐贴右角；终端过窄时先丢分支，仍不够则行钳到信息宽度
+///   （病态窄终端不截断信息，宁可行略超宽由终端折行）。
+fn input_box_top(
+    model: &str,
+    mode: &str,
+    ctx_pct: usize,
+    branch: Option<&str>,
+    width: u16,
+) -> String {
+    let pct = if ctx_pct >= 80 {
+        format!("\x1b[1;31m{ctx_pct}%\x1b[90m")
+    } else if ctx_pct >= 60 {
+        format!("\x1b[1;33m{ctx_pct}%\x1b[90m")
+    } else {
+        format!("{ctx_pct}%")
+    };
+    let info = format!("\x1b[1;36m✳ {model}\x1b[90m · {mode} · {pct}");
+    let info_w = display_width(&info);
+    let w = usize::from(width).max(info_w + 5);
+    // 分支名来自外部 git 仓库（不可信输入），进终端前剥离 C0 控制字符
+    // ——0.5.4 渲染层转义注入防护同款（git check-ref-format 已拒控制
+    // 字符，此处为纵深防御）
+    let mut right = branch.map(|b| {
+        let clean = crate::render::markdown::strip_control(b);
+        format!(" {clean} ")
+    });
+    loop {
+        let right_w = right.as_deref().map_or(0, display_width);
+        let fill = w.saturating_sub(5 + info_w + right_w);
+        if fill >= 1 {
+            let fill_s = "─".repeat(fill);
+            let right_s = right.unwrap_or_default();
+            return format!("\x1b[90m╭─ {info}{fill_s}{right_s}─╮\x1b[0m");
+        }
+        if right.is_some() {
+            right = None;
+            continue;
+        }
+        // 病态窄终端：恰好信息宽度，无填充
+        return format!("\x1b[90m╭─ {info}─╮\x1b[0m");
+    }
+}
+
+/// 输入框底边：`╰─ ─────── 状态行 ─╯`，状态行右对齐（保留其 ANSI 颜色，
+/// 宽度按剥色后计算）；无状态行时纯边框。状态行过长按显示宽度截断加省略号。
+fn input_box_bottom(status: Option<&str>, width: u16) -> String {
+    let w = usize::from(width).max(12);
+    match status {
+        Some(s) if !s.trim().is_empty() => {
+            let s = s.trim_end();
+            let sw = display_width(s);
+            if sw + 6 > w {
+                let plain = strip_ansi_codes(s);
+                let (cut, truncated) = truncate_disp(&plain, w.saturating_sub(8).max(1));
+                let s = if truncated { format!("{cut}…") } else { cut };
+                let sw = display_width(&s);
+                let fill = w.saturating_sub(6 + sw).max(1);
+                format!("\x1b[90m╰─{fill} {s} ─╯\x1b[0m", fill = "─".repeat(fill))
+            } else {
+                let fill = w.saturating_sub(6 + sw).max(1);
+                format!("\x1b[90m╰─{fill} {s} ─╯\x1b[0m", fill = "─".repeat(fill))
+            }
+        }
+        _ => format!("\x1b[90m╰─{}─╯\x1b[0m", "─".repeat(w.saturating_sub(4))),
+    }
+}
+
+/// 按显示宽度截断（保 UTF-8 边界），返回（截断文本，是否被截）。
+fn truncate_disp(s: &str, max: usize) -> (String, bool) {
+    use unicode_width::UnicodeWidthChar;
+    let mut w = 0usize;
+    let mut cut = String::new();
+    for c in s.chars() {
+        let cw = UnicodeWidthChar::width(c).unwrap_or(0);
+        if w + cw > max {
+            return (cut, true);
+        }
+        cut.push(c);
+        w += cw;
+    }
+    (cut, false)
+}
+
+/// 当前 git 分支短名（非 git 仓库 / detached / 失败 → None）。
+/// 每次提示符前调用（~ms 级进程开销，换取 Claude Code 式实时分支显示）。
+/// 用 symbolic-ref 而非 rev-parse --abbrev-ref HEAD：后者在无提交的
+/// 空仓库（unborn branch）里 fatal 退出，前者两者皆可、detached 时失败。
+fn git_branch_short(work_dir: &str) -> Option<String> {
+    let out = std::process::Command::new("git")
+        .args(["symbolic-ref", "--short", "HEAD"])
+        .current_dir(work_dir)
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let name = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if name.is_empty() { None } else { Some(name) }
 }
 
 #[cfg(test)]
@@ -2490,11 +2820,169 @@ mod tests {
     /// raw 完全一致（显示宽度一致）。
     #[test]
     fn prompt_raw_plain_and_styled_matches() {
-        let (raw, styled) = build_prompt("promptstdio", "deepseek-v4-flash");
+        let (raw, styled) = build_prompt("promptstdio");
         assert!(!raw.contains('\x1b'), "raw 提示符不得含 ANSI 转义");
         assert_eq!(strip_ansi(&styled), raw);
-        // 期望形态：❯ <目录> <模型>（尾部空格）
-        assert_eq!(raw, "❯ promptstdio deepseek-v4-flash ");
+        // 期望形态：│ ❯ <目录>（尾部空格）
+        assert_eq!(raw, "│ ❯ promptstdio ");
+    }
+
+    /// 输入框顶部信息行：总显示宽度 == 给定宽度；branch 右对齐。
+    #[test]
+    fn input_box_top_widths_and_branch() {
+        // 60 列：info 33 列 + 右边框 3 + branch「 main 」6 + 边框 3 = 60
+        let line = input_box_top("deepseek-v4-flash", "default", 12, Some("main"), 60);
+        assert_eq!(display_width(&line), 60, "整行宽度必须等于终端宽");
+        assert!(strip_ansi(&line).starts_with("╭─"), "以圆角左上角开头");
+        assert!(
+            strip_ansi(&line).ends_with(" main ─╮"),
+            "branch 右对齐于右边框内"
+        );
+        assert!(strip_ansi(&line).contains("✳ deepseek-v4-flash · default · 12%"));
+
+        // 窄宽度（20 < info 宽 35+5）：丢弃 branch，行钳到信息宽度
+        let narrow = input_box_top("deepseek-v4-flash", "default", 12, Some("main"), 20);
+        assert!(
+            !strip_ansi(&narrow).contains("main"),
+            "窄宽度不得携带 branch"
+        );
+        assert_eq!(display_width(&narrow), 40, "行钳到 info 宽 + 5");
+
+        // 病态窄宽度（5 < info 宽）→ 同上，宁可行略超宽由终端折行
+        let tiny = input_box_top("deepseek-v4-flash", "default", 12, Some("main"), 5);
+        assert_eq!(display_width(&tiny), 40);
+
+        // 恶意分支名（注入 ANSI/OSC/BEL）进终端前被剥离
+        let evil = input_box_top("m", "default", 10, Some("\x1b[31mred\x1b]0;x\x07evil"), 80);
+        // 行内样式 ESC（\x1b[90m/\x1b[1;36m 等）是合法的——只断言注入序列不存活
+        assert!(
+            !evil.contains("\x1b[31m") && !evil.contains('\x07'),
+            "注入的控制序列必须剥离"
+        );
+        assert!(
+            strip_ansi(&evil).contains("[31mred]0;xevil"),
+            "可打印字符保留（CSI 载荷文本不算控制字符）"
+        );
+    }
+
+    /// ctx 占用阈值着色：<60 无色、≥60 黄、≥80 红。
+    #[test]
+    fn input_box_top_ctx_threshold_colors() {
+        let low = input_box_top("m", "default", 40, None, 80);
+        assert!(!low.contains("\x1b[1;33m") && !low.contains("\x1b[1;31m"));
+        let mid = input_box_top("m", "default", 70, None, 80);
+        assert!(mid.contains("\x1b[1;33m"), "≥60% 应标黄");
+        let high = input_box_top("m", "default", 90, None, 80);
+        assert!(high.contains("\x1b[1;31m"), "≥80% 应标红");
+    }
+
+    /// 输入框底部：status 右对齐；无 status 时纯底边；长 status 截断 + …。
+    #[test]
+    fn input_box_bottom_status() {
+        let with_s = input_box_bottom(Some("12:03"), 60);
+        assert_eq!(display_width(&with_s), 60);
+        assert!(
+            strip_ansi(&with_s).ends_with("12:03 ─╯"),
+            "status 右对齐于底边"
+        );
+
+        let none = input_box_bottom(None, 30);
+        assert_eq!(display_width(&none), 30);
+        assert!(
+            strip_ansi(&none).ends_with("─╯"),
+            "无 status 时仍是完整底边"
+        );
+
+        let long = input_box_bottom(Some(&"x".repeat(60)), 30);
+        assert_eq!(display_width(&long), 30, "长 status 必须截断到框内");
+        assert!(strip_ansi(&long).contains('…'), "截断处应有省略号");
+        assert!(strip_ansi(&long).ends_with("─╯"));
+    }
+
+    /// display_width：ANSI 剥除后按 unicode-width 计宽（CJK 双宽）。
+    #[test]
+    fn display_width_counts_visible_chars() {
+        assert_eq!(display_width("12:03"), 5);
+        assert_eq!(display_width("\x1b[31m12:03\x1b[0m"), 5);
+        assert_eq!(display_width("中文"), 4);
+    }
+
+    /// 输入高亮：slash 命令青、参数灰；! 黄；@ 青；注入的 ESC 被剥离。
+    #[test]
+    fn highlight_styles_lines() {
+        use rustyline::highlight::Highlighter as _;
+        let c = StitchCompleter::new("");
+        let styled = c.highlight("/model deepseek-v4-flash", 0);
+        assert!(
+            styled.contains("\x1b[1;36m/model\x1b[0m"),
+            "命令名应青色加粗"
+        );
+        assert!(
+            styled.contains("\x1b[90m deepseek-v4-flash\x1b[0m"),
+            "参数应灰色"
+        );
+        assert_eq!(strip_ansi(&styled), "/model deepseek-v4-flash");
+
+        let shell = c.highlight("!ls -la", 0);
+        assert!(shell.contains("\x1b[1;33m"), "! 指令应黄色加粗");
+
+        let mention = c.highlight("@README.md", 0);
+        assert!(mention.contains("\x1b[1;36m"), "@ 文件引用应青色加粗");
+
+        // 纯文本保持借用，不产生新分配
+        let plain = c.highlight("hello", 0);
+        assert!(matches!(plain, std::borrow::Cow::Borrowed(_)));
+
+        // C0 控制字符注入被剥离（0.5.4 防护，复用于高亮）
+        let injected = c.highlight("/m\x1b[31mred", 0);
+        assert!(!injected.contains("\x1b[31m"), "注入的 CSI 必须被剥离");
+    }
+
+    /// fish 式灰提示：/ 前缀给出命令续尾；普通输入走历史建议。
+    #[test]
+    fn hinter_suggests_slash_and_history() {
+        let c = StitchCompleter::new("");
+        let ctx = repl_test_ctx();
+        use rustyline::hint::Hinter as _;
+        assert_eq!(c.hint("/mod", 4, &ctx).as_deref(), Some("el"));
+        assert_eq!(c.hint("/model", 6, &ctx), None, "已输全命令无提示");
+        assert_eq!(c.hint("/xyz", 4, &ctx), None, "未知命令无提示");
+        assert_eq!(
+            c.hint("/", 1, &ctx).as_deref(),
+            Some("help"),
+            "裸 / 提示首个内置"
+        );
+
+        // 历史建议：hello → " world"
+        use rustyline::history::History as _;
+        let mut hist = rustyline::history::DefaultHistory::default();
+        hist.add("hello world").unwrap();
+        let hctx = rustyline::Context::new(&hist);
+        assert_eq!(c.hint("hello", 5, &hctx).as_deref(), Some(" world"));
+    }
+
+    /// git 分支探测：有效分支名返回 Some；非仓库 / detached 返回 None。
+    #[test]
+    fn git_branch_short_probe() {
+        let dir = tempfile::tempdir().unwrap();
+        let ok = std::process::Command::new("git")
+            .args(["init", "-b", "my-branch"])
+            .current_dir(dir.path())
+            .output()
+            .expect("git 必须可用");
+        assert!(ok.status.success(), "git init 失败: {:?}", ok);
+        assert_eq!(
+            git_branch_short(dir.path().to_str().unwrap()),
+            Some("my-branch".to_string())
+        );
+
+        // CARGO_MANIFEST_DIR 在仓库内，不能当非仓库用例——用新临时目录
+        let non_repo = tempfile::tempdir().unwrap();
+        assert_eq!(
+            git_branch_short(non_repo.path().to_str().unwrap()),
+            None,
+            "非 git 仓库返回 None"
+        );
     }
 
     /// 补全测试用的 Context（rustyline 15 的 Context::new 需要 history 参数）。
@@ -2616,6 +3104,16 @@ mod tests {
         }
         assert!(matches!(parse_slash("/think"), SlashAction::Think(args) if args.is_empty()));
         assert!(matches!(parse_slash("/init"), SlashAction::Init));
+        // 第十四轮：/skill 原生 slash
+        assert!(matches!(parse_slash("/skill"), SlashAction::Skill(args) if args.is_empty()));
+        match parse_slash("/skill excel-report") {
+            SlashAction::Skill(args) => assert_eq!(args, ["excel-report"]),
+            other => panic!("expected Skill(args), got {other:?}"),
+        }
+        match parse_slash("/skill off") {
+            SlashAction::Skill(args) => assert_eq!(args, ["off"]),
+            other => panic!("expected Skill(off), got {other:?}"),
+        }
         // 非 slash 行不该走到这里（调用方先判断 starts_with('/')）
     }
 

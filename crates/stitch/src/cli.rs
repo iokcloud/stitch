@@ -77,6 +77,39 @@ pub struct Cli {
     /// 始终生效（bypass 模式下也不放行）——CI / 受限场景禁危险工具。
     #[arg(long, global = true, value_name = "TOOL", value_delimiter = ',')]
     pub disallowed_tools: Vec<String>,
+
+    /// 工具白名单（可重复，逗号分隔）：非空时只允许列表内的工具，
+    /// 其余直接拒绝（deny 规则仍优先）——最小权限执行环境。
+    #[arg(long, global = true, value_name = "TOOL", value_delimiter = ',')]
+    pub allowed_tools: Vec<String>,
+
+    /// 会话级快速配置（可重复，`KEY=VALUE`）：permission_mode /
+    /// disallowed_tools / append_system_prompt / statusline / model，
+    /// 优先级高于 config 与 settings.json（不落盘，仅本次会话）。
+    #[arg(long, global = true, value_name = "KEY=VALUE")]
+    pub setting: Vec<String>,
+
+    /// 模型参数配置（JSON 文件）：{"temperature": 0.7, "top_p": 0.9,
+    /// "max_tokens": 4096} ——覆盖默认采样参数（DeepSeek V4 支持）。
+    #[arg(long, global = true, value_name = "FILE")]
+    pub model_config: Option<std::path::PathBuf>,
+
+    /// 附加文件到上下文（可重复）：内容注入每次请求的系统提示末尾，
+    /// 模型始终可见（Claude Code --include 语义）。
+    #[arg(long, global = true, value_name = "PATH")]
+    pub include: Vec<std::path::PathBuf>,
+
+    /// 精确恢复指定会话 id（Claude Code --session-id 语义）：
+    /// 跳过交互选择直接进入该会话；`stitch sessions` 查看 id。
+    /// chat 子命令下优先 --resume，其次 --session-id。
+    #[arg(long, global = true, value_name = "ID")]
+    pub session_id: Option<String>,
+
+    /// 外部 MCP 服务器配置文件（Claude Code --mcp-config 语义）：
+    /// 兼容 Cursor / Claude Desktop `mcpServers` JSON，会话级加载合并
+    /// （同 id 覆盖 config.toml 配置，不落盘）。
+    #[arg(long, global = true, value_name = "FILE")]
+    pub mcp_config: Option<std::path::PathBuf>,
 }
 
 #[derive(Subcommand)]

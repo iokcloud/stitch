@@ -424,6 +424,8 @@ pub async fn needs_plan(
         messages,
         max_tokens: 16,
         tools: None,
+        temperature: None,
+        top_p: None,
     };
 
     let llm_handle = tokio::spawn(async move {
@@ -484,6 +486,8 @@ pub async fn generate_plan(
         messages,
         max_tokens: 2048,
         tools: None, // No tools for plan generation
+        temperature: None,
+        top_p: None,
     };
 
     tokio::spawn(async move {

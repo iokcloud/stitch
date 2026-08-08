@@ -20,6 +20,7 @@ use crate::llm::{self, LlmRequest, StreamEvent};
 use crate::session::{self, Session, ToolCall};
 use crate::tools::{self, ToolDef, ToolRegistry};
 use std::collections::HashMap;
+use std::io::Write;
 use std::sync::Arc;
 
 /// Result of one complete agent interaction.
@@ -221,11 +222,49 @@ impl CliRenderer {
     }
 }
 
+/// run 模式工具结果行：✓ 绿 / ✗ 红 + 灰色摘要（140 字符截断保 UTF-8 边界，
+/// 剥控制字符防注入）——与交互模式（repl.rs 事件循环）同款样式。
+fn tool_done_line(success: bool, summary: &str) -> String {
+    let mark = if success {
+        "\x1b[1;32m✓\x1b[0m"
+    } else {
+        "\x1b[1;31m✗\x1b[0m"
+    };
+    let s: String = crate::render::markdown::strip_control(summary)
+        .chars()
+        .take(140)
+        .collect();
+    format!("{mark} \x1b[90m{s}\x1b[0m")
+}
+
 impl ReactRenderer for CliRenderer {
     fn on_interim_text(&mut self, text: &str) {
         crate::render::render_message(text);
     }
-    fn on_event(&mut self, _ev: AgentEvent) {}
+    fn on_event(&mut self, ev: AgentEvent) {
+        // run 模式过程反馈：长任务（多工具步骤）不静默。
+        // 样式与交互模式（repl.rs 事件循环）一致；--stream-json 走
+        // DesktopRenderer 不受影响，机器可读输出不被污染。
+        match ev {
+            AgentEvent::ToolStart { name, .. } => {
+                print!("\n\x1b[90m·\x1b[0m \x1b[1;36m{name}\x1b[0m ");
+                let _ = std::io::stdout().flush();
+            }
+            AgentEvent::ToolOutput { text, .. } => {
+                print!(
+                    "\x1b[2m{}\x1b[0m",
+                    crate::render::markdown::strip_control(&text)
+                );
+                let _ = std::io::stdout().flush();
+            }
+            AgentEvent::ToolDone {
+                success, summary, ..
+            } => {
+                println!("{}", tool_done_line(success, &summary));
+            }
+            _ => {}
+        }
+    }
     async fn confirm_tool(&mut self, _tool: &str, _call_id: &str, message: &str) -> bool {
         crate::render::dialog::confirm(message)
     }
@@ -427,6 +466,8 @@ pub(crate) async fn run_react_core<R: ReactRenderer>(
             messages: session.messages.clone(),
             max_tokens: 4096,
             tools: Some(tool_defs.clone()),
+            temperature: None,
+            top_p: None,
         };
 
         let llm_handle = tokio::spawn(async move {
@@ -590,6 +631,8 @@ pub(crate) async fn run_react_core<R: ReactRenderer>(
         messages: session.messages.clone(),
         max_tokens: 2048,
         tools: None,
+        temperature: None,
+        top_p: None,
     };
 
     tokio::spawn(async move {
@@ -1351,7 +1394,7 @@ Allow?",
 
 #[cfg(test)]
 mod tests {
-    use super::{enrich_tool_observation, tool_call_failed, truncate_output};
+    use super::{enrich_tool_observation, tool_call_failed, tool_done_line, truncate_output};
 
     #[test]
     fn tool_call_failed_judges_structurally() {
@@ -1373,6 +1416,31 @@ mod tests {
             "output": "echo \"success\":true",
         });
         assert!(tool_call_failed(&polluted), "字符串 contains 判定会被污染");
+    }
+
+    #[test]
+    fn tool_done_line_formats_success_failure_and_strips_injection() {
+        // 成功：绿 ✓ + 灰色摘要
+        let ok = tool_done_line(true, "3 files changed");
+        assert!(ok.starts_with("\x1b[1;32m✓\x1b[0m \x1b[90m"));
+        assert!(ok.ends_with("3 files changed\x1b[0m"));
+        assert!(!ok.contains("✗"));
+        // 失败：红 ✗
+        let err = tool_done_line(false, "git conflict");
+        assert!(err.starts_with("\x1b[1;31m✗\x1b[0m \x1b[90m"));
+        // 注入：摘要里的 ESC 序列被剥离，不留可执行转义
+        let injected = tool_done_line(true, "ok\x1b[2Jrm -rf\x1b]0;x\x07");
+        assert!(!injected.contains('\x1b') || injected.contains("\x1b[1;32m"));
+        // 注：前导/尾随固定样式本身含 ESC，验证剥离点在摘要段
+        let body = injected.trim_start_matches("\x1b[1;32m✓\x1b[0m \x1b[90m");
+        assert_eq!(body.trim_end_matches("\x1b[0m"), "ok[2Jrm -rf]0;x");
+        // 截断：140 字符上限且不切破 UTF-8 边界
+        let long = tool_done_line(true, &"字".repeat(300));
+        assert_eq!(
+            long.chars().count(),
+            140 + "\x1b[1;32m✓\x1b[0m \x1b[90m\x1b[0m".chars().count()
+        );
+        assert!(long.ends_with("\x1b[0m"));
     }
 
     fn truncate_output_keeps_output_under_20kb_verbatim() {

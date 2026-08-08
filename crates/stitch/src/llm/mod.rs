@@ -108,6 +108,22 @@ pub struct LlmRequest {
     pub max_tokens: usize,
     /// Tool definitions for function calling (OpenAI format).
     pub tools: Option<Vec<serde_json::Value>>,
+    /// 会话级采样参数覆盖（--model-config）：发送处合并，None = 用模型默认。
+    pub temperature: Option<f32>,
+    pub top_p: Option<f32>,
+}
+
+/// 合并会话级采样覆盖（--model-config）与请求默认：返回
+/// (temperature, top_p, max_tokens)——覆盖存在时优先，否则请求默认。
+fn merge_sampling(request: &LlmRequest) -> (Option<f32>, Option<f32>, usize) {
+    match crate::session_settings::model_overrides() {
+        Some(o) => (
+            o.temperature,
+            o.top_p,
+            o.max_tokens.unwrap_or(request.max_tokens),
+        ),
+        None => (None, None, request.max_tokens),
+    }
 }
 
 // ── OpenAI API types ──────────────────────────────────────────────
@@ -124,6 +140,10 @@ struct ChatRequest<'a> {
     /// DeepSeek V4: thinking is a request flag (not a separate model name).
     #[serde(skip_serializing_if = "Option::is_none")]
     thinking: Option<ThinkingMode>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    temperature: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    top_p: Option<f32>,
 }
 
 #[derive(Serialize, Clone, Copy)]
@@ -340,13 +360,16 @@ pub async fn stream_chat(
         request.api_base.trim_end_matches('/')
     );
     let thinking = deepseek_thinking_for(&request.api_base, &request.model);
+    let (temperature, top_p, max_tokens) = merge_sampling(&request);
     let chat_req = ChatRequest {
         model: resolved_model,
         messages: &request.messages,
         stream: true,
-        max_tokens: Some(request.max_tokens),
+        max_tokens: Some(max_tokens),
         tools: request.tools.as_deref(),
         thinking,
+        temperature,
+        top_p,
     };
 
     tracing::debug!(%url, model = %request.model, msg_count = request.messages.len(), "sending chat request");
@@ -371,13 +394,16 @@ pub async fn complete_chat(request: LlmRequest) -> anyhow::Result<String> {
         request.api_base.trim_end_matches('/')
     );
     let thinking = deepseek_thinking_for(&request.api_base, &request.model);
+    let (temperature, top_p, max_tokens) = merge_sampling(&request);
     let chat_req = ChatRequest {
         model: resolved_model,
         messages: &request.messages,
         stream: false,
-        max_tokens: Some(request.max_tokens),
+        max_tokens: Some(max_tokens),
         tools: None,
         thinking,
+        temperature,
+        top_p,
     };
 
     let body = serde_json::to_value(&chat_req)?;

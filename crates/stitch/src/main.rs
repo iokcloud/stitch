@@ -17,6 +17,7 @@ mod permission;
 mod render;
 mod repl;
 mod session;
+mod session_settings;
 mod statusline;
 mod tools;
 mod upgrade;
@@ -53,28 +54,68 @@ async fn run_command(cli: Cli) -> anyhow::Result<()> {
         .unwrap_or_else(|_| ".".into());
     let settings = workspace_settings::WorkspaceSettings::load(&cwd);
 
-    // 追加系统提示：CLI flag + settings.json 合并（prompt 构建时最末尾注入）
+    // 会话级设置（--setting）：解析后与 CLI flag / settings 合并（最高优先）
+    let (set_mode, set_deny, set_prompts, set_statusline, set_model) =
+        session_settings::parse_settings(&cli.setting)?;
+    let session_mode = cli.permission_mode.as_deref().or(set_mode.as_deref());
+
+    // 模型参数覆盖（--model-config）
+    if let Some(mc_path) = &cli.model_config {
+        session_settings::set_model_overrides(session_settings::ModelOverrides::from_file(
+            mc_path,
+        )?);
+    }
+
+    // statusline 覆盖（--setting statusline=…）：非空时优先于 settings/config
+    crate::statusline::set_override(set_statusline);
+
+    // 外部 MCP 服务器配置（--mcp-config）：会话级合并，不落盘
+    if let Some(mcp_path) = &cli.mcp_config {
+        let servers = crate::mcp_protocol::load_config_file(mcp_path)?;
+        crate::mcp_protocol::set_extra_servers(servers);
+    }
+
+    // 追加系统提示：CLI flag + --setting + settings.json 合并
+    // （prompt 构建时最末尾注入；--include 文件块同样挂末尾）
     let mut extras = cli.append_system_prompt.clone();
-    for e in &settings.append_system_prompt {
-        if !extras.contains(e) {
+    for e in set_prompts
+        .iter()
+        .chain(settings.append_system_prompt.iter())
+    {
+        if !extras.iter().any(|x| x == e) {
             extras.push(e.clone());
+        }
+    }
+    // --include：文件内容渲染为始终可见块，追加在用户指令之后
+    if !cli.include.is_empty() {
+        let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        let includes = session_settings::load_includes(&cli.include, &cwd)?;
+        let block = session_settings::render_includes(&includes);
+        if !block.is_empty() {
+            extras.push(block);
         }
     }
     agent::prompt::set_append_prompts(extras);
 
-    // 权限模式 + deny 规则：CLI flag > settings > config > 默认 default/空
+    // 权限模式 + deny 规则：CLI flag > --setting > settings > config
     {
         let cfg = config::StitchConfig::load().unwrap_or_default();
-        let deny =
+        let mut deny =
             workspace_settings::WorkspaceSettings::merged_deny(&cfg.disallowed_tools, &settings);
+        for d in &set_deny {
+            if !deny.iter().any(|x| x == d) {
+                deny.push(d.clone());
+            }
+        }
         permission::apply_from_cli(
-            cli.permission_mode.as_deref(),
+            session_mode,
             settings
                 .permission_mode
                 .as_deref()
                 .or(cfg.permission_mode.as_deref()),
             &deny,
             &cli.disallowed_tools,
+            &cli.allowed_tools,
         )?;
     }
 
@@ -84,7 +125,7 @@ async fn run_command(cli: Cli) -> anyhow::Result<()> {
             // `stitch -p "任务"` / `echo "…" | stitch -p`：跑完即退
             return cmd_run(
                 vec![prompt.clone()],
-                None,
+                set_model.clone(),
                 false,
                 cli.json,
                 cli.output_format,
@@ -98,9 +139,9 @@ async fn run_command(cli: Cli) -> anyhow::Result<()> {
         crate::upgrade::check_update_and_hint().await;
         return repl::run_chat(
             cfg,
-            None,
+            cli.session_id.clone(),
             false,
-            None,
+            set_model,
             cli.add_dir.clone(),
             cli.budget,
             cli.max_turns,
@@ -112,7 +153,7 @@ async fn run_command(cli: Cli) -> anyhow::Result<()> {
         Command::Run { prompt, model, yes } => {
             cmd_run(
                 prompt,
-                model,
+                model.or(set_model),
                 yes,
                 cli.json,
                 cli.output_format,
@@ -135,20 +176,23 @@ async fn run_command(cli: Cli) -> anyhow::Result<()> {
             let cfg = config::StitchConfig::load()?;
             let resume = match resume {
                 Some(Some(id)) => Some(id),
-                Some(None) => {
-                    // `--resume` 无参：交互选择器
-                    let work_dir = std::env::current_dir()
-                        .map(|p| p.display().to_string())
-                        .unwrap_or_else(|_| ".".into());
-                    match pick_session(&work_dir)? {
-                        Some(id) => Some(id),
-                        None => {
-                            println!("本工作区暂无保存的会话（运行 stitch chat 开始一个）");
-                            None
+                // `--resume` 无参：--session-id 兜底，否则交互选择器
+                Some(None) => match cli.session_id.clone() {
+                    Some(id) => Some(id),
+                    None => {
+                        let work_dir = std::env::current_dir()
+                            .map(|p| p.display().to_string())
+                            .unwrap_or_else(|_| ".".into());
+                        match pick_session(&work_dir)? {
+                            Some(id) => Some(id),
+                            None => {
+                                println!("本工作区暂无保存的会话（运行 stitch chat 开始一个）");
+                                None
+                            }
                         }
                     }
-                }
-                None => None,
+                },
+                None => cli.session_id.clone(),
             };
             let fork = match fork {
                 Some(Some(target)) => Some(target),
@@ -172,7 +216,7 @@ async fn run_command(cli: Cli) -> anyhow::Result<()> {
                 cfg,
                 resume,
                 continue_,
-                model,
+                model.or(set_model),
                 cli.add_dir.clone(),
                 cli.budget,
                 cli.max_turns,
@@ -387,14 +431,14 @@ async fn cmd_doctor() -> anyhow::Result<()> {
         );
     }
 
-    // 6. MCP 服务器逐个连通（复用 /mcp 健康视图逻辑）
-    let servers = cfg.enabled_mcp_servers();
+    // 6. MCP 服务器逐个连通（复用 /mcp 健康视图逻辑；含 --mcp-config 外部合并）
+    let servers = crate::mcp_protocol::effective_servers(&cfg.mcp_servers);
     if servers.is_empty() {
         println!("MCP：— 未配置（/mcp add 添加服务器）");
     } else {
         for p in servers {
             let url = p.url.as_deref().or(p.command.as_deref()).unwrap_or("");
-            match crate::mcp_protocol::list_tools(p).await {
+            match crate::mcp_protocol::list_tools(&p).await {
                 Ok(tools) => println!("MCP：✓ {} — {url}（{} 工具）", p.label, tools.len()),
                 Err(e) => println!("MCP：✗ {} — {url}（连接失败：{e}）", p.label),
             }
@@ -651,6 +695,11 @@ async fn cmd_run(
     let extra_roots = repl::resolve_add_dirs(&add_dirs)?;
 
     let mut tools = tools::build_registry_with_dirs(&work_dir, &extra_roots);
+    // MCP 工具接入：enabled 服务器（config + --mcp-config 外部合并）发现工具
+    // 挂进注册表（连接失败静默跳过）
+    let mcp_servers = crate::mcp_protocol::effective_servers(&cfg.mcp_servers);
+    let mcp_tools = crate::mcp_protocol::discover_enabled(&mcp_servers).await;
+    tools.attach_mcp_tools(&mcp_tools, &mcp_servers);
     let sub_ctx = tools::build_subagent_ctx(
         &cfg.llm_api_base,
         &model,

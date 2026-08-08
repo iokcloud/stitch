@@ -59,6 +59,8 @@ pub struct PermissionConfig {
     pub mode: PermissionMode,
     /// deny 规则：工具名精确列表（始终生效，含 bypass）。
     pub deny_tools: Vec<String>,
+    /// 白名单：非空时只允许列表内的工具（deny 仍优先）。
+    pub allow_tools: Vec<String>,
 }
 
 impl Default for PermissionConfig {
@@ -66,6 +68,7 @@ impl Default for PermissionConfig {
         Self {
             mode: PermissionMode::Default,
             deny_tools: Vec::new(),
+            allow_tools: Vec::new(),
         }
     }
 }
@@ -86,12 +89,14 @@ pub fn current() -> PermissionConfig {
 }
 
 /// 从 CLI 参数 + config 应用权限配置（CLI flag 优先于 config；无效值报错）。
-/// `cli_deny`（--disallowed-tools）与 config 的 deny 列表取并集。
+/// `cli_deny`（--disallowed-tools）与 config 的 deny 列表取并集；
+/// `cli_allow`（--allowed-tools）为白名单（非空即生效）。
 pub fn apply_from_cli(
     flag: Option<&str>,
     cfg_mode: Option<&str>,
     cfg_deny: &[String],
     cli_deny: &[String],
+    cli_allow: &[String],
 ) -> anyhow::Result<()> {
     let mode = match flag.or(cfg_mode) {
         Some(s) => PermissionMode::parse(s).ok_or_else(|| {
@@ -105,7 +110,12 @@ pub fn apply_from_cli(
             deny_tools.push(t.clone());
         }
     }
-    set_config(PermissionConfig { mode, deny_tools });
+    let allow_tools = cli_allow.to_vec();
+    set_config(PermissionConfig {
+        mode,
+        deny_tools,
+        allow_tools,
+    });
     Ok(())
 }
 
@@ -139,11 +149,21 @@ fn is_edit(tool_name: &str) -> bool {
     matches!(tool_name, "write_file" | "edit_file")
 }
 
-/// 裁决一次工具调用：deny 规则优先（始终生效），其次模式。
+/// 裁决一次工具调用：deny 规则优先（始终生效），其次白名单，再模式。
 pub fn adjudicate(tool_name: &str) -> Verdict {
     let cfg = current();
     if cfg.deny_tools.iter().any(|d| d == tool_name) {
         return Verdict::Deny(format!("tool `{tool_name}` is disallowed"));
+    }
+    // 白名单非空：列表外拒绝，列表内直接放行（最小权限执行环境）。
+    if !cfg.allow_tools.is_empty() {
+        if cfg.allow_tools.iter().any(|a| a == tool_name) {
+            return Verdict::Allow;
+        }
+        return Verdict::Deny(format!(
+            "tool `{tool_name}` 不在白名单（--allowed-tools 只允许 {}）",
+            cfg.allow_tools.join(", ")
+        ));
     }
     match cfg.mode {
         PermissionMode::Bypass => Verdict::Allow,
@@ -200,6 +220,7 @@ mod tests {
         set_config(PermissionConfig {
             mode,
             deny_tools: deny.iter().map(|s| s.to_string()).collect(),
+            allow_tools: Vec::new(),
         });
     }
 
@@ -274,6 +295,7 @@ mod tests {
             Some("default"),
             &["run_command".to_string()],
             &["write_file".to_string(), "run_command".to_string()],
+            &[],
         )
         .unwrap();
         let pc = current();
@@ -288,14 +310,37 @@ mod tests {
     #[test]
     fn apply_from_cli_rejects_bad_mode() {
         let _g = lock();
-        let r = apply_from_cli(Some("bogus"), None, &[], &[]);
+        let r = apply_from_cli(Some("bogus"), None, &[], &[], &[]);
         assert!(r.is_err());
         // flag 优先：config 有效但 flag 无效 → 报错
-        let r = apply_from_cli(Some("bogus"), Some("plan"), &[], &[]);
+        let r = apply_from_cli(Some("bogus"), Some("plan"), &[], &[], &[]);
         assert!(r.is_err());
         // 无 flag：config 生效
-        apply_from_cli(None, Some("plan"), &[], &[]).unwrap();
+        apply_from_cli(None, Some("plan"), &[], &[], &[]).unwrap();
         assert_eq!(current().mode, PermissionMode::Plan);
+    }
+
+    #[test]
+    fn allowlist_denies_outside_tools() {
+        let _g = lock();
+        // 白名单非空：只允许列表内工具
+        apply_from_cli(None, None, &[], &[], &["read_file".to_string()]).unwrap();
+        assert!(matches!(adjudicate("read_file"), Verdict::Allow));
+        assert!(matches!(adjudicate("write_file"), Verdict::Deny(_)));
+        assert!(matches!(adjudicate("run_command"), Verdict::Deny(_)));
+        // deny 仍优先于白名单：列表内但被 deny 的工具也拒绝
+        apply_from_cli(
+            None,
+            None,
+            &["read_file".to_string()],
+            &[],
+            &["read_file".to_string()],
+        )
+        .unwrap();
+        assert!(matches!(adjudicate("read_file"), Verdict::Deny(_)));
+        // 空白名单 = 不限制
+        apply_from_cli(None, None, &[], &[], &[]).unwrap();
+        assert_eq!(adjudicate("read_file"), Verdict::Ask);
     }
 
     #[test]

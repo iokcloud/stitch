@@ -11,7 +11,7 @@ pub use import::{parse_mcp_servers_json, split_args_line};
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use http::{HeaderName, HeaderValue};
 use rmcp::ServiceExt;
@@ -21,6 +21,46 @@ use rmcp::transport::{ConfigureCommandExt, StreamableHttpClientTransport, TokioC
 use serde_json::Value;
 
 use crate::config::McpServerProfile;
+
+// ── 会话级外部 MCP 配置（--mcp-config，不落盘）────────────────
+
+/// 外部配置文件加载的服务器（会话级）：与 config 的 mcp_servers 合并，
+/// 同 id 外部覆盖配置（Claude Code `--mcp-config` 语义）。
+static EXTRA_SERVERS: Mutex<Vec<McpServerProfile>> = Mutex::new(Vec::new());
+
+/// 设置外部 MCP 服务器（--mcp-config 启动时调用）。
+pub fn set_extra_servers(servers: Vec<McpServerProfile>) {
+    if let Ok(mut g) = EXTRA_SERVERS.lock() {
+        *g = servers;
+    }
+}
+
+/// 解析 `--mcp-config` 文件：兼容 Cursor / Claude Desktop `mcpServers`
+/// map 或服务器数组（复用 import 解析器）。
+pub fn load_config_file(path: &PathBuf) -> anyhow::Result<Vec<McpServerProfile>> {
+    let raw = std::fs::read_to_string(path)
+        .map_err(|e| anyhow::anyhow!("读取 MCP 配置失败 {}: {e}", path.display()))?;
+    parse_mcp_servers_json(&raw)
+}
+
+/// 生效的 MCP 服务器列表：config 配置 + 外部加载（同 id 外部覆盖），
+/// 保持 id 排序稳定。
+pub fn effective_servers(cfg_servers: &[McpServerProfile]) -> Vec<McpServerProfile> {
+    let extras = EXTRA_SERVERS.lock().map(|g| g.clone()).unwrap_or_default();
+    if extras.is_empty() {
+        return cfg_servers.to_vec();
+    }
+    let mut out = cfg_servers.to_vec();
+    for ext in extras {
+        if let Some(slot) = out.iter_mut().find(|s| s.id == ext.id) {
+            *slot = ext;
+        } else {
+            out.push(ext);
+        }
+    }
+    out.sort_by(|a, b| a.id.cmp(&b.id));
+    out
+}
 
 fn hide_console(cmd: &mut tokio::process::Command) {
     #[cfg(windows)]
@@ -416,5 +456,74 @@ mod tests {
         assert_eq!(s, "my-server");
         assert_eq!(t, "list_files");
         assert!(parse_qualified_tool_name("list_directory").is_none());
+    }
+
+    /// 外部配置（--mcp-config）：无外部时原样返回；同 id 外部覆盖；新增追加。
+    #[test]
+    fn effective_servers_merges_extra() {
+        set_extra_servers(Vec::new());
+        let cfg = vec![profile("cfg-a", "echo a"), profile("shared", "echo cfg")];
+        // 无外部：原样
+        assert_eq!(effective_servers(&cfg).len(), 2);
+        assert!(
+            effective_servers(&cfg)
+                .iter()
+                .all(|s| s.command.as_deref() == Some("echo a")
+                    || s.command.as_deref() == Some("echo cfg"))
+        );
+
+        // 外部：同 id 覆盖 + 新增
+        set_extra_servers(vec![
+            profile("shared", "echo ext"),
+            profile("ext-b", "echo b"),
+        ]);
+        let merged = effective_servers(&cfg);
+        let shared = merged.iter().find(|s| s.id == "shared").unwrap();
+        assert_eq!(shared.command.as_deref(), Some("echo ext"));
+        assert_eq!(merged.len(), 3);
+        assert!(merged.iter().any(|s| s.id == "ext-b"));
+        set_extra_servers(Vec::new());
+    }
+
+    #[test]
+    fn load_config_file_parses_claude_desktop_shape() {
+        let dir = std::env::temp_dir().join(format!("stitch-mcp-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("mcp.json");
+        std::fs::write(
+            &f,
+            r#"{"mcpServers": {"fs": {"command": "npx", "args": ["-y", "server-fs"], "env": {}}, "remote": {"url": "https://example.com/mcp", "headers": {"Authorization": "Bearer x"}}}}"#,
+        )
+        .unwrap();
+        let servers = load_config_file(&f).unwrap();
+        assert_eq!(servers.len(), 2);
+        let fs = servers.iter().find(|s| s.id == "fs").unwrap();
+        assert_eq!(fs.transport, "stdio");
+        assert!(fs.enabled);
+        let remote = servers.iter().find(|s| s.id == "remote").unwrap();
+        assert_eq!(remote.transport, "http");
+        assert_eq!(remote.url.as_deref(), Some("https://example.com/mcp"));
+        // 损坏 JSON 报错
+        std::fs::write(&f, "{broken").unwrap();
+        assert!(load_config_file(&f).is_err());
+        // 空 map 报错
+        std::fs::write(&f, r#"{"mcpServers": {}}"#).unwrap();
+        assert!(load_config_file(&f).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn profile(id: &str, command: &str) -> McpServerProfile {
+        McpServerProfile {
+            id: id.into(),
+            label: id.into(),
+            transport: "stdio".into(),
+            enabled: true,
+            command: Some(command.into()),
+            args: Vec::new(),
+            env: HashMap::new(),
+            cwd: None,
+            url: None,
+            headers: HashMap::new(),
+        }
     }
 }

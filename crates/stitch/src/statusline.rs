@@ -8,7 +8,28 @@
 //!
 //! 超时 10 秒、输出上限 2KB——状态行绝不阻塞会话。
 
+use std::sync::Mutex;
 use std::time::Duration;
+
+/// 会话级覆盖（--setting statusline=…）：非空时优先于 settings/config。
+static OVERRIDE: Mutex<Option<String>> = Mutex::new(None);
+
+/// 设置会话级 statusline 覆盖（--setting，不落盘）。
+pub fn set_override(cmd: Option<String>) {
+    if let Ok(mut g) = OVERRIDE.lock() {
+        *g = cmd;
+    }
+}
+
+/// 解析最终 statusline：--setting > settings.json > config。
+pub fn resolved<'a>(settings: Option<&'a str>, cfg: Option<&'a str>) -> Option<String> {
+    OVERRIDE
+        .lock()
+        .ok()
+        .and_then(|g| g.clone())
+        .or_else(|| settings.map(str::to_string))
+        .or_else(|| cfg.map(str::to_string))
+}
 
 /// 解析命令输出：JSON `{"text": …}` 或纯文本。
 pub fn parse_output(stdout: &str) -> String {

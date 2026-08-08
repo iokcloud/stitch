@@ -55,6 +55,11 @@ struct ResponsesRequest<'a> {
     /// agent 工具循环保持一致用 `effort: none` 关掉（实测接受）。
     #[serde(skip_serializing_if = "Option::is_none")]
     reasoning: Option<ReasoningConfig>,
+    /// 会话级采样覆盖（--model-config），None 不序列化。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    temperature: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    top_p: Option<f32>,
 }
 
 #[derive(Serialize, Clone, Copy)]
@@ -169,14 +174,17 @@ fn build_request<'a>(
     } else {
         None
     };
+    let (temperature, top_p, max_tokens) = super::merge_sampling(request);
     ResponsesRequest {
         model: resolved_model,
         instructions,
         input,
         stream,
-        max_output_tokens: Some(request.max_tokens),
+        max_output_tokens: Some(max_tokens),
         tools: request.tools.as_deref().map(convert_tools),
         reasoning,
+        temperature,
+        top_p,
     }
 }
 

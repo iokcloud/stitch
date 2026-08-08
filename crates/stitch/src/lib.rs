@@ -25,6 +25,8 @@ pub mod mcp_protocol;
 pub mod permission;
 pub mod render;
 pub mod session;
+/// 会话级启动参数（--setting / --model-config / --include）。
+pub mod session_settings;
 /// statusLine——每回合结束的自定义状态行（config.statusline 命令）。
 pub mod statusline;
 pub mod tools;

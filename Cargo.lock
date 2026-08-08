@@ -4115,7 +4115,7 @@ dependencies = [
 
 [[package]]
 name = "promptstdio-core"
-version = "0.5.3"
+version = "0.5.4"
 dependencies = [
  "hmac",
  "jsonschema",
@@ -5336,7 +5336,7 @@ checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
 
 [[package]]
 name = "stitch"
-version = "0.5.3"
+version = "0.5.4"
 dependencies = [
  "anyhow",
  "chrono",
@@ -5369,13 +5369,14 @@ dependencies = [
  "toml 0.8.2",
  "tracing",
  "tracing-subscriber",
+ "unicode-width",
  "uuid",
  "windows 0.61.3",
 ]
 
 [[package]]
 name = "stitch-desktop"
-version = "0.5.3"
+version = "0.5.4"
 dependencies = [
  "anyhow",
  "chrono",
