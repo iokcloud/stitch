@@ -275,6 +275,11 @@ export type LayerStats = {
 
 export type AgentEvent =
   | { type: "token"; text: string }
+  | {
+      /** Thinking-process tokens (CLI /think on; desktop UI intentionally ignores). */
+      type: "thinking";
+      text: string;
+    }
   | { type: "tool_start"; name: string; call_id?: string }
   | { type: "tool_output"; name: string; call_id?: string; text: string }
   | {
@@ -315,7 +320,9 @@ export type AgentEvent =
   | { type: "plan_approved" }
   | { type: "plan_rejected" }
   | { type: "plan_step_start"; index: number; description: string }
-  | { type: "plan_step_done"; index: number; description: string };
+  | { type: "plan_step_done"; index: number; description: string }
+  | { type: "subagent_start"; name: string; description: string; tools?: string[] }
+  | { type: "subagent_done"; name: string; success: boolean; summary: string };
 
 /** OpenAI-compatible provider presets (id → display + default base + model hints). */
 export type ProviderPreset = {

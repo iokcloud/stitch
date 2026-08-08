@@ -1,55 +1,10 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { findVisibleUiLeak } from "../helpers/ui-hygiene";
-import { shot } from "../helpers/chat-desktop";
+import { waitBooted, shot } from "../helpers/chat-desktop";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const OUT = path.resolve(__dirname, "../artifacts/desktop-smoke");
-
-async function waitBooted() {
-  await browser.waitUntil(
-    async () => {
-      const title = await browser.getTitle();
-      return title.toLowerCase().includes("stitch");
-    },
-    {
-      timeout: 30_000,
-      timeoutMsg: "window title never contained Stitch (wrong driver/port?)",
-      interval: 500,
-    },
-  );
-
-  await browser.waitUntil(
-    async () => {
-      const settings = await $('[data-testid="settings-view"]');
-      const chat = await $('[data-testid="chat-view"]');
-      const bootError = await $('[data-testid="boot-error"]');
-      return (
-        (await settings.isExisting()) ||
-        (await chat.isExisting()) ||
-        (await bootError.isExisting())
-      );
-    },
-    {
-      timeout: 60_000,
-      timeoutMsg: "neither settings, chat, nor boot-error appeared after launch",
-      interval: 500,
-    },
-  );
-
-  const bootError = await $('[data-testid="boot-error"]');
-  if (await bootError.isExisting()) {
-    const text = await bootError.getText().catch(() => "");
-    throw new Error(`app reached boot-error surface: ${text}`);
-  }
-
-  await browser.waitUntil(async () => !(await $("#app-loader").isExisting()), {
-    timeout: 20_000,
-    timeoutMsg: "#app-loader still present after main view mounted",
-  });
-
-  await $('[data-testid="diag-view"]').waitForExist({ timeout: 10_000 });
-}
 
 async function readView() {
   const text = await $('[data-testid="diag-view"]').getText();
@@ -89,6 +44,19 @@ async function enterChat() {
 }
 
 describe("Stitch desktop smoke", () => {
+  before(async () => {
+    // WebView2 localStorage 跨 session 持久（S-016）：侧栏可能停在
+    // library tab（store 启动时已读旧值，清键须 reload 才能重置——
+    // 但 reload 会打断 wdio execute 上下文）。直接点「会话」tab 切回，
+    // UI 操作触发 store.set("sessions")，workspace-panel 即渲染。
+    await waitBooted();
+    const sessionsTab = await $('.side-seg-btn[role="tab"]');
+    if (await sessionsTab.isExisting()) {
+      const selected = await sessionsTab.getAttribute("aria-selected");
+      if (selected !== "true") await sessionsTab.click();
+    }
+  });
+
   it("boots and can navigate settings ↔ chat", async () => {
     await waitBooted();
     await openSettings();

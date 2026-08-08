@@ -366,7 +366,15 @@ pub(crate) fn config_to_snapshot(cfg: &StitchConfig) -> ConfigSnapshot {
     }
 }
 
-async fn build_agent_registry(work_dir: &str, cfg: &StitchConfig) -> tools::ToolRegistry {
+/// 构建代理注册表（含 MCP 工具 + Task 子代理工具）。
+/// 返回 `(registry, subagent_ctx)`——ctx 供调用方在跑回合前注入事件通道。
+async fn build_agent_registry(
+    work_dir: &str,
+    cfg: &StitchConfig,
+) -> (
+    tools::ToolRegistry,
+    std::sync::Arc<tools::task::SubagentCtx>,
+) {
     let mut registry = tools::build_registry(work_dir);
     let enabled: Vec<_> = cfg
         .mcp_servers
@@ -374,19 +382,29 @@ async fn build_agent_registry(work_dir: &str, cfg: &StitchConfig) -> tools::Tool
         .filter(|p| p.enabled)
         .cloned()
         .collect();
-    if enabled.is_empty() {
-        return registry;
+    if !enabled.is_empty() {
+        let discovered = mcp_protocol::discover_enabled(&enabled).await;
+        if !discovered.is_empty() {
+            tracing::info!(
+                count = discovered.len(),
+                servers = enabled.len(),
+                "attached MCP protocol tools"
+            );
+        }
+        registry.attach_mcp_tools(&discovered, &enabled);
     }
-    let discovered = mcp_protocol::discover_enabled(&enabled).await;
-    if !discovered.is_empty() {
-        tracing::info!(
-            count = discovered.len(),
-            servers = enabled.len(),
-            "attached MCP protocol tools"
-        );
-    }
-    registry.attach_mcp_tools(&discovered, &enabled);
-    registry
+    // api_key 回合内 resolve 后经 sub_ctx.set_api_key 注入（此处留空）。
+    let sub_ctx = tools::build_subagent_ctx(
+        &cfg.llm_api_base,
+        &cfg.llm_model,
+        "",
+        cfg.max_iterations,
+        Some(work_dir),
+        &registry,
+        stitch::agents::load_agents(Some(work_dir)),
+    );
+    tools::attach_subagents(&mut registry, &sub_ctx);
+    (registry, sub_ctx)
 }
 
 fn mask_key(key: &str) -> String {
@@ -2127,7 +2145,8 @@ pub async fn send_message(
     if is_recording {
         tracing::info!("skill recording mode active for turn");
     }
-    let tools = build_agent_registry(&work_dir, &cfg).await;
+    let (tools, sub_ctx) = build_agent_registry(&work_dir, &cfg).await;
+    sub_ctx.set_api_key(&api_key);
     let system_prompt = agent::prompt::build_system_prompt(&work_dir, &tools);
 
     // History carries image data URLs only when the model receives images
@@ -2267,6 +2286,7 @@ pub async fn send_message(
                 AGENT_EVENT_CHANNEL,
                 serde_json::to_value(AgentEvent::PlanStepStart {
                     index: i,
+                    total: total_steps,
                     description: step.description.clone(),
                 })
                 .unwrap_or_default(),
@@ -2279,6 +2299,7 @@ pub async fn send_message(
             ));
 
             let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel::<AgentEvent>();
+            sub_ctx.set_event_tx(event_tx.clone());
             let agent_flag = cancel_flag.clone();
             let confirm_pending = confirm_state.pending.clone();
             let rules_s = confirm_state.rules.clone();
@@ -2349,6 +2370,7 @@ pub async fn send_message(
         session.add_user_message(agent::plan::plan_summary_prompt());
         let summary_budget = max_iterations.clamp(3, 6);
         let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel::<AgentEvent>();
+        sub_ctx.set_event_tx(event_tx.clone());
         let agent_flag = cancel_flag.clone();
         let confirm_pending = confirm_state.pending.clone();
         let rules_s = confirm_state.rules.clone();
@@ -2403,6 +2425,7 @@ pub async fn send_message(
     }
 
     let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel::<AgentEvent>();
+    sub_ctx.set_event_tx(event_tx.clone());
     let agent_flag = cancel_flag.clone();
     let confirm_pending = confirm_state.pending.clone();
     let rules_s = confirm_state.rules.clone();
@@ -2820,12 +2843,14 @@ pub async fn run_suite(
             AGENT_EVENT_CHANNEL,
             serde_json::to_value(AgentEvent::PlanStepStart {
                 index: idx,
+                total: suite.step_count,
                 description: step.step_title.clone(),
             })
             .unwrap_or_default(),
         );
 
-        let tools = build_agent_registry(&work_dir, &cfg).await;
+        let (tools, sub_ctx) = build_agent_registry(&work_dir, &cfg).await;
+        sub_ctx.set_api_key(&api_key);
         let system_prompt = agent::prompt::build_system_prompt(&work_dir, &tools);
         let mut session = Session::new(system_prompt);
         let user_message = format!(
@@ -3103,7 +3128,8 @@ pub async fn run_agent(
         .lock()
         .map_err(|e| e.to_string())?
         .clone();
-    let tools = build_agent_registry(&work_dir, &cfg).await;
+    let (tools, sub_ctx) = build_agent_registry(&work_dir, &cfg).await;
+    sub_ctx.set_api_key(&api_key);
     let system_prompt = format!(
         "{}\n\n## 编排规则\n{orch_rules_str}\n\n## 完成指引\n{completion_instruction}",
         agent::prompt::build_system_prompt(&work_dir, &tools),
@@ -3133,6 +3159,7 @@ pub async fn run_agent(
     let cancel_flag = state.flag.clone();
     let cancel_notify = state.notify.clone();
     let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel::<AgentEvent>();
+    sub_ctx.set_event_tx(event_tx.clone());
     let agent_flag = cancel_flag.clone();
     let confirm_pending = confirm_state.pending.clone();
     let rules_s = confirm_state.rules.clone();

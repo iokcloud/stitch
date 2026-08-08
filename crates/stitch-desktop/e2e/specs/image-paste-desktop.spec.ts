@@ -1,30 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
-import { shot } from "../helpers/chat-desktop";
+import { waitBooted, shot } from "../helpers/chat-desktop";
 
 /** 1x1 transparent PNG (base64) — tiny enough for any paste path. */
 const PNG_B64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
 
 const OUT = "artifacts/image-paste-desktop";
-
-async function waitBooted() {
-  await browser.waitUntil(
-    async () => {
-      const title = await browser.getTitle();
-      return title.toLowerCase().includes("stitch");
-    },
-    { timeout: 30_000, timeoutMsg: "window title never contained Stitch", interval: 500 },
-  );
-  await browser.waitUntil(
-    async () => {
-      const bootError = await $('[data-testid="boot-error"]');
-      return !(await bootError.isExisting());
-    },
-    { timeout: 60_000, timeoutMsg: "boot-error appeared after launch", interval: 500 },
-  );
-  await $('[data-testid="diag-view"]').waitForExist({ timeout: 20_000 });
-}
 
 async function readView() {
   const text = await $('[data-testid="diag-view"]').getText();

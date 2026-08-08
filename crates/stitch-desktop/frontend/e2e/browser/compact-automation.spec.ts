@@ -23,6 +23,9 @@ test.describe("compact automation overlay", () => {
     await page.getByTestId("chat-input").press("Enter");
     await expect(page.getByTestId("stream-rail")).toBeVisible({ timeout: 5_000 });
     await expect(page.getByTestId("compact-bar")).toBeHidden();
+    // 等回合结束（mock 工具约 7s）——守卫只跟踪已处于紧凑模式后的工具，
+    // 先切模式再发第二条消息，执行态标签才成立。
+    await expect(page.getByTestId("stream-rail")).toHaveCount(0, { timeout: 12_000 });
 
     // 手动切换：顶栏紧凑钮 → 浮条可见。
     await page.getByTestId("topbar-compact-toggle").click();
@@ -31,7 +34,9 @@ test.describe("compact automation overlay", () => {
       await page.evaluate(() => document.documentElement.getAttribute("data-compact")),
     ).toBe("true");
 
-    // Execution state: Chinese tool label + breathing glow (no stopwatch).
+    // 已处于紧凑模式时工具开始 → 执行态标签跟踪（中文工具名 + 呼吸光晕）。
+    await page.getByTestId("chat-input").fill("截个屏看看");
+    await page.getByTestId("chat-input").press("Enter");
     await expect(page.getByTestId("compact-tool")).toContainText("正在执行 截图", {
       timeout: 5_000,
     });

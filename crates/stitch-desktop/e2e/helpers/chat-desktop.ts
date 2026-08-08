@@ -185,16 +185,21 @@ export async function sendChat(text: string, idleTimeout = 180_000) {
 }
 
 export async function setPlanMode(on: boolean) {
-  const checked = await browser.execute(() => {
-    const el = document.querySelector(
-      '[data-testid="plan-mode-toggle"]',
-    ) as HTMLInputElement | null;
-    return !!el?.checked;
-  });
-  if (checked !== on) {
-    await $('[data-testid="plan-mode-toggle"]').click();
+  // 三态按钮（auto/on/off）：按 aria-label 循环点击直到目标态
+  // （on=含「强制」· off=含「关闭」）。旧实现按 input.checked 读状态恒 false，
+  // setPlanMode(false) 永不点击——planMode 持久化残留（S-016 同族）会让
+  // 真机探针全部卡在计划待批准。
+  const btn = await $('[data-testid="plan-mode-toggle"]');
+  const want = on ? "强制" : "关闭";
+  for (let i = 0; i < 4; i++) {
+    const label = await btn.getAttribute("aria-label");
+    if (label && label.includes(want)) return;
+    await btn.click();
     await browser.pause(200);
   }
+  throw new Error(
+    `plan-mode-toggle 无法切到 ${want}（label=${await btn.getAttribute("aria-label")}）`,
+  );
 }
 
 export async function newSession() {

@@ -111,8 +111,8 @@ test.describe("Theme visual QA", () => {
         fg: r.getPropertyValue("--color-foreground").trim(),
       };
     });
-    expect(tokens.bg.toLowerCase()).toMatch(/^#f4f6f8$/);
-    expect(tokens.fg.toLowerCase()).toMatch(/^#0f172a$/);
+    expect(tokens.bg.toLowerCase()).toMatch(/^#f4f6f8$|^#f7f7f8$/);
+    expect(tokens.fg.toLowerCase()).toMatch(/^#0f172a$|^#1a1a1e$/);
     // No warm-beige / washed blue-gray regression
     expect(tokens.bg.toLowerCase()).not.toMatch(/ebe7df|e0dbd1|f7f5f1|e8eef5/);
   });

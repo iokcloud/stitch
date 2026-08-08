@@ -1,5 +1,5 @@
 /** Debug probe: where does a simple tool turn hang? */
-import { bootChat, newSession, setWorkDir, fillChat, clickSend } from "../helpers/chat-desktop";
+import { bootChat, newSession, setWorkDir, fillChat, clickSend, setPlanMode } from "../helpers/chat-desktop";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -11,6 +11,17 @@ describe("debug stream hang", () => {
     await bootChat();
     await newSession();
     await setWorkDir(repoRoot);
+    const toggleState = await browser.execute(() => {
+      const el = document.querySelector('[data-testid="plan-mode-toggle"]') as HTMLInputElement | null;
+      return el ? el.checked : "MISSING";
+    });
+    console.log("[PROBE toggle-before]", JSON.stringify(toggleState));
+    await setPlanMode(false);
+    const toggleAfter = await browser.execute(() => {
+      const el = document.querySelector('[data-testid="plan-mode-toggle"]') as HTMLInputElement | null;
+      return el ? el.checked : "MISSING";
+    });
+    console.log("[PROBE toggle-after]", JSON.stringify(toggleAfter));
     await fillChat("先列出当前工作目录的顶层结构");
     await clickSend();
 

@@ -344,6 +344,10 @@ import { terminalOpen, toggleTerminal } from "$lib/terminal/store";
               }
               break;
             }
+            case "thinking": {
+              // CLI /think 的思考流：桌面 UI 不展示（避免噪音），忽略即可。
+              break;
+            }
             case "tool_start": {
               if (get(skillRecording)) {
                 skillRecordSteps.update((n) => n + 1);
@@ -439,6 +443,17 @@ import { terminalOpen, toggleTerminal } from "$lib/terminal/store";
             }
             case "notice": {
               if (ev.message) pushToast(ev.message, "info");
+              break;
+            }
+            case "subagent_start": {
+              pushToast(`委派子代理 ${ev.name}：${ev.description}`, "info");
+              break;
+            }
+            case "subagent_done": {
+              pushToast(
+                `子代理 ${ev.name} ${ev.success ? "完成" : "失败"}：${ev.summary}`,
+                ev.success ? "info" : "error",
+              );
               break;
             }
             case "done": {

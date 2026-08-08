@@ -6,38 +6,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { findVisibleUiLeak } from "../helpers/ui-hygiene";
-import { shot } from "../helpers/chat-desktop";
+import { waitBooted, shot } from "../helpers/chat-desktop";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const OUT = path.resolve(__dirname, "../artifacts/account-chip-probe");
-
-async function waitBooted() {
-  await browser.waitUntil(
-    async () => (await browser.getTitle()).toLowerCase().includes("stitch"),
-    { timeout: 30_000, timeoutMsg: "title missing Stitch" },
-  );
-  await browser.waitUntil(
-    async () => {
-      const settings = await $('[data-testid="settings-view"]');
-      const chat = await $('[data-testid="chat-view"]');
-      const bootError = await $('[data-testid="boot-error"]');
-      return (
-        (await settings.isExisting()) ||
-        (await chat.isExisting()) ||
-        (await bootError.isExisting())
-      );
-    },
-    { timeout: 60_000, timeoutMsg: "no main surface after launch" },
-  );
-  if (await $('[data-testid="boot-error"]').isExisting()) {
-    throw new Error(`boot-error: ${await $('[data-testid="boot-error"]').getText()}`);
-  }
-  await browser.waitUntil(async () => !(await $("#app-loader").isExisting()), {
-    timeout: 20_000,
-    timeoutMsg: "loader stuck",
-  });
-  await $('[data-testid="diag-view"]').waitForExist({ timeout: 10_000 });
-}
 
 async function readView() {
   const text = await $('[data-testid="diag-view"]').getText();

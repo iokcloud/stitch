@@ -22,7 +22,7 @@ OUT_DIR="$REPO_RUST/data/downloads"
 BASE_URL="${STITCH_DOWNLOAD_BASE:-https://www.promptstdio.com/downloads}"
 
 export STITCH_CONF_PY="$(to_py_path "$CONF")"
-VERSION="$(python -c 'import json,os; print(json.load(open(os.environ["STITCH_CONF_PY"]))["version"])')"
+VERSION="$(python -c 'import json,os; print(json.load(open(os.environ["STITCH_CONF_PY"], encoding="utf-8"))["version"])')"
 SETUP_NAME="Stitch_${VERSION}_x64-setup.exe"
 
 if [[ -n "${STITCH_SETUP_EXE:-}" ]]; then

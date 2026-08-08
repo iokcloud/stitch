@@ -25,14 +25,17 @@ test.describe("tool live output", () => {
     const toolCard = page.getByTestId("tool-status");
     await expect(toolCard).toBeVisible({ timeout: 5_000 });
 
-    // …and an early line appears while the tool is still running (well
-    // before the mock's tool_done arrives).
+    // 默认只显示单行实时尾巴（高度稳定不抢滚动）——完整输出不自动展开。
+    const tail = page.getByTestId("tool-live-tail");
+    await expect(tail).toBeVisible({ timeout: 5_000 });
+    await expect(page.getByTestId("tool-live-output")).toHaveCount(0);
+    await expect(page.getByTestId("tool-progress")).toBeVisible();
+
+    // 点击卡片头展开 → 完整 live 输出流式出现（ADR-037）并钉在最新行。
+    await toolCard.locator(".tool-call-main").click();
     const live = page.getByTestId("tool-live-output");
     await expect(live).toBeVisible({ timeout: 5_000 });
     await expect(live).toContainText("resolve dep 1/40", { timeout: 5_000 });
-    await expect(page.getByTestId("tool-progress")).toBeVisible();
-
-    // The live region keeps growing and stays pinned to the tail line.
     await expect(live).toContainText("linking done in 3.2s", { timeout: 8_000 });
     const tailVisible = await live.evaluate((el) => {
       const body = el.querySelector(".tool-shell-body") as HTMLElement | null;
@@ -40,6 +43,10 @@ test.describe("tool live output", () => {
       return body.scrollHeight - body.scrollTop - body.clientHeight < 4;
     });
     expect(tailVisible).toBe(true);
+    // 再点收起 → 回到单行尾巴（切换往返确定状态，完成态折叠时才从收起出发）。
+    await toolCard.locator(".tool-call-main").click();
+    await expect(live).toHaveCount(0);
+    await expect(tail).toBeVisible();
 
     // After done, the card carries the full final output and stops spinning.
     await expect(

@@ -5,12 +5,12 @@
 #   drive real harness → capture evidence → print PASS/FAIL report → exit code.
 #
 # Usage (Git Bash, from crate root or repo root):
-#   sh rust/crates/stitch-desktop/scripts/accept.sh
-#   sh scripts/accept.sh --layers A
-#   sh scripts/accept.sh --layers A,B
-#   sh scripts/accept.sh --layers A,mature
-#   sh scripts/accept.sh --layers A,B,mature
-#   sh scripts/accept.sh --layers updater          # U0 prod latest
+#   bash rust/crates/stitch-desktop/scripts/accept.sh
+#   bash rust/crates/stitch-desktop/scripts/accept.sh --layers A
+#   bash rust/crates/stitch-desktop/scripts/accept.sh --layers A,B
+#   bash rust/crates/stitch-desktop/scripts/accept.sh --layers A,mature
+#   bash rust/crates/stitch-desktop/scripts/accept.sh --layers A,B,mature
+#   bash rust/crates/stitch-desktop/scripts/accept.sh --layers updater  # U0 prod latest
 #   sh scripts/accept.sh --layers A,updater
 #
 # Agent MUST run this before claiming Stitch UI/desktop work done.

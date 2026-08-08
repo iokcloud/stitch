@@ -71,16 +71,28 @@ async function collectToolMetrics(): Promise<ToolRun[]> {
   });
 }
 
-function tasklistHas(proc: string): boolean {
-  try {
-    const out = execSync(`tasklist /FI "IMAGENAME eq ${proc}.exe" /NH`, {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    });
-    return out.toLowerCase().includes(proc);
-  } catch {
-    return false;
+/** 同步 sleep（Node 主线程阻断用 Atomics.wait 共享缓冲）。 */
+function sleepSync(ms: number) {
+  const sab = new SharedArrayBuffer(4);
+  Atomics.wait(new Int32Array(sab), 0, 0, ms);
+}
+
+/** Poll tasklist until proc is gone (or timeout) — close→process-exit has a race. */
+function tasklistGone(proc: string, timeoutMs = 5000): boolean {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      const out = execSync(`tasklist /FI "IMAGENAME eq ${proc}.exe" /NH`, {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+      });
+      if (!out.toLowerCase().includes(proc)) return true;
+    } catch {
+      return true;
+    }
+    sleepSync(300);
   }
+  return false;
 }
 
 const EDGE_CANDIDATES = [
@@ -116,6 +128,15 @@ describe("Desktop automation benchmark", () => {
       /* already closed */
     }
     httpServer?.close();
+    // 保留会话 transcript（agent 工具调用全史）供失败诊断
+    try {
+      const sessSrc = path.join(workDir, ".stitch", "sessions");
+      if (fs.existsSync(sessSrc)) {
+        fs.cpSync(sessSrc, path.join(outDir, "sessions"), { recursive: true });
+      }
+    } catch {
+      /* 无所谓 */
+    }
     writeReport();
     try {
       fs.rmSync(workDir, { recursive: true, force: true });
@@ -147,7 +168,18 @@ describe("Desktop automation benchmark", () => {
       tools = await collectToolMetrics();
       const v = await verify();
       pass = v.ok;
-      if (!v.ok) failReason = v.reason ?? "verification failed";
+      if (!v.ok) {
+        failReason = v.reason ?? "verification failed";
+        // 附上 agent 最后回复，失败可自诊断
+        try {
+          const after = await chatStats();
+          if (after?.lastAssistant) {
+            failReason += ` | last: ${after.lastAssistant.replace(/\s+/g, " ").slice(0, 300)}`;
+          }
+        } catch {
+          /* 诊断信息拿不到就算了 */
+        }
+      }
     } catch (e) {
       failReason = `exception: ${String(e).slice(0, 300)}`;
     }
@@ -181,7 +213,7 @@ describe("Desktop automation benchmark", () => {
 1. 用 desktop_app_launch 打开记事本（app 填 notepad）。
 2. 用 desktop_type 输入这一行文字（不含引号）：${t1Marker} desktop automation
 3. 用 desktop_key 按 ctrl+s 保存，在弹出的保存对话框中用 desktop_type 把文件路径输入为：${benchTxt}，然后按回车确认保存。
-4. 用 desktop_window_action 关闭记事本窗口（title 填「记事本」，action 填 close）。
+4. 用 desktop_window_action 关闭记事本窗口（action 填 close；title 先用 desktop_window_list 读实际窗口标题再匹配——系统语言可能是英文 "Notepad"，不要假设中文标题）。
 完成后告诉我文件已保存到哪个路径。`,
       async () => {
         if (!fs.existsSync(benchTxt)) {
@@ -191,7 +223,7 @@ describe("Desktop automation benchmark", () => {
         if (!body.includes(t1Marker)) {
           return { ok: false, reason: `artifact lacks marker "${t1Marker}"` };
         }
-        if (tasklistHas("notepad")) {
+        if (!tasklistGone("notepad")) {
           return { ok: false, reason: "notepad still running after close" };
         }
         return { ok: true };
@@ -221,7 +253,7 @@ describe("Desktop automation benchmark", () => {
     await runTask(
       "T2",
       "browser-read",
-      `屏幕上已打开一个浏览器窗口，显示一个本地测试页面。请用 desktop_browser 工具读出页面上显示的大字标记文本（用 read_page 或截图 OCR 都行），然后告诉我页面上显示的标记是什么。`,
+      `屏幕上已打开一个浏览器窗口，显示一个本地测试页面。请用 desktop_browser 工具读出页面上显示的大字标记文本（用 read_page 或截图 OCR 都行），然后告诉我页面上显示的标记是什么。注意：如果浏览器页面被其他窗口遮挡，先用 desktop_window_action 把遮挡窗口最小化，再截图 OCR。`,
       async () => {
         const after = await chatStats();
         const reply = after.lastAssistant;
@@ -264,9 +296,9 @@ describe("Desktop automation benchmark", () => {
     await runTask(
       "T4",
       "window-ops",
-      `请用桌面自动化完成：1. 用 desktop_app_launch 打开记事本（app 填 notepad）。2. 用 desktop_window_list 确认记事本窗口在列表中。3. 用 desktop_window_action 关闭标题包含「记事本」的窗口（action 填 close）。完成后告诉我窗口是否已关闭。`,
+      `请用桌面自动化完成：1. 用 desktop_app_launch 打开记事本（app 填 notepad）。2. 用 desktop_window_list 确认记事本窗口在列表中（注意系统语言可能是英文，标题形如 "Untitled - Notepad"）。3. 用 desktop_window_action 关闭记事本窗口（action 填 close；title 按第 2 步读到的实际标题匹配）。完成后告诉我窗口是否已关闭。`,
       async () => {
-        if (tasklistHas("notepad")) {
+        if (!tasklistGone("notepad")) {
           return { ok: false, reason: "notepad still running after close" };
         }
         return { ok: true };

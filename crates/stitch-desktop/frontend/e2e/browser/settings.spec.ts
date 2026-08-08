@@ -26,6 +26,9 @@ test.describe("Settings navigation & model smoke", () => {
     await page.goto("/");
 
     await expect(page.getByTestId("settings-view")).toBeVisible({ timeout: 15_000 });
+    // 无密钥默认进首次向导——「跳过，去设置」回到设置页首启模式
+    await page.getByRole("button", { name: "跳过，去设置" }).click();
+    await expect(page.getByTestId("firstrun-wizard")).toHaveCount(0);
     await expect(page.getByTestId("settings-go-chat")).toHaveCount(0);
 
     await page.getByLabel("API 密钥").fill("sk-test-e2e-key");
@@ -40,6 +43,8 @@ test.describe("Settings navigation & model smoke", () => {
     await page.goto("/");
 
     await expect(page.getByTestId("settings-view")).toBeVisible({ timeout: 15_000 });
+    await page.getByRole("button", { name: "跳过，去设置" }).click();
+    await expect(page.getByTestId("firstrun-wizard")).toHaveCount(0);
     await page.getByTestId("settings-save").click();
 
     await expect(page.getByTestId("settings-footer-status")).toHaveText(/请先填写 API Key/);
@@ -63,6 +68,8 @@ test.describe("Settings navigation & model smoke", () => {
     await mockTauri(page, { apiKeySet: false });
     await page.goto("/");
     await expect(page.getByTestId("settings-view")).toBeVisible({ timeout: 15_000 });
+    await page.getByRole("button", { name: "跳过，去设置" }).click();
+    await expect(page.getByTestId("firstrun-wizard")).toHaveCount(0);
 
     await page.getByLabel("API 密钥").fill("sk-typed-no-save");
     await expect(page.getByTestId("settings-go-chat")).toHaveCount(0);

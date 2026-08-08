@@ -5,6 +5,16 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const crateRoot = path.resolve(__dirname, "..");
 const workspaceTarget = path.resolve(crateRoot, "../../target");
 
+// debug 构建默认用 stitch-dev 配置目录（config.rs debug_assertions 分支）——
+// 真机探针语义是「用正式配置测 debug 构建」，注入正式配置目录（tauri-service
+// 启动的 exe 继承本环境变量）。可被 STITCH_CONFIG_DIR 显式覆盖。
+if (!process.env.STITCH_CONFIG_DIR) {
+  const appData = process.env.APPDATA ?? "";
+  if (appData) {
+    process.env.STITCH_CONFIG_DIR = path.join(appData, "promptstdio", "stitch");
+  }
+}
+
 const isWin = process.platform === "win32";
 const binaryName = isWin ? "stitch-desktop.exe" : "stitch-desktop";
 const defaultBinary = path.join(workspaceTarget, "debug", binaryName);

@@ -29,8 +29,9 @@ test.describe("Light theme visual capture", () => {
         mutedVar: root.getPropertyValue("--color-muted").trim(),
       };
     });
-    // Light theme: brand ink + non-white page chrome
-    expect(contrast.fgVar.toLowerCase()).toMatch(/^#1a2b4c$|^#0[0-9a-f]{5}$/);
+    // Light theme: dark neutral ink + non-white page chrome
+    // （2026-08-03 浅色中性化：#1a2b4c slate 蓝墨 → #1a1a1e 中性墨）
+    expect(contrast.fgVar.toLowerCase()).toMatch(/^#1a2b4c$|^#0[0-9a-f]{5}$|^#1a1a1e$/);
     expect(contrast.bgVar.toLowerCase()).not.toBe("#ffffff");
     const m = contrast.color.match(/rgb\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/);
     expect(m).toBeTruthy();

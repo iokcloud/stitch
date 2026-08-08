@@ -6,6 +6,14 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 REPO="$(cd "$ROOT/../../.." && pwd)"
 E2E="$ROOT/e2e"
+
+# 前置断言：fake manifest 版本必须高于 app 版本（否则 discover 必然「已是最新」）
+APP_VERSION="$(python -c 'import json;print(json.load(open(r"'$ROOT'/tauri.conf.json"))["version"])' 2>/dev/null || echo 0.0.0)"
+FAKE_VERSION="$(python -c 'import json;print(json.load(open(r"'$E2E'/fixtures/fake-update/stitch-update.json"))["version"])' 2>/dev/null || echo 0.0.0)"
+if [[ "$FAKE_VERSION" < "$APP_VERSION" ]]; then
+  echo "FAIL: fake fixture version $FAKE_VERSION < app $APP_VERSION — updater discover 必然失败。请先升级 e2e/fixtures/fake-update/stitch-update.json。" >&2
+  exit 1
+fi
 PORT="${STITCH_FAKE_UPDATE_PORT:-18765}"
 PID_FILE="${TMPDIR:-/tmp}/stitch-fake-update-${PORT}.pid"
 

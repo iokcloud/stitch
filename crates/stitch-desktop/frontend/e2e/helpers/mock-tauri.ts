@@ -47,6 +47,10 @@ export type MockTauriOptions = {
   isMember?: boolean;
   /** When true, check_update reports a newer version (U1 UI path). */
   updateAvailable?: boolean;
+  /** Emit a tool that fails (tool_done success:false) — 失败卡自动展开路径。 */
+  streamFailTool?: boolean;
+  /** When true, fetch_announce returns an announcement (公告横幅路径). */
+  announceAvailable?: boolean;
 };
 
 /**
@@ -78,6 +82,8 @@ export async function mockTauri(page: Page, opts: MockTauriOptions = {}) {
   const testPromptstdioFail = opts.testPromptstdioFail ?? false;
   const isMember = opts.isMember ?? false;
   const updateAvailable = opts.updateAvailable ?? false;
+  const failTool = opts.streamFailTool ?? false;
+  const announceOn = opts.announceAvailable ?? false;
 
   await page.addInitScript(
     ({
@@ -105,6 +111,8 @@ export async function mockTauri(page: Page, opts: MockTauriOptions = {}) {
       testPromptstdioFail: promptFail,
       isMember: member,
       updateAvailable: haveUpdate,
+      streamFailTool: failTool,
+      announceAvailable: announceOn,
     }) => {
       let allowRules: Array<{ tool: string; scope: string; value: string }> =
         seededRules.map((r) => ({ ...r }));
@@ -348,6 +356,30 @@ export async function mockTauri(page: Page, opts: MockTauriOptions = {}) {
             input_tokens: 1400,
             output_tokens: 30,
             context_tokens: 2000,
+            context_limit: 64_000,
+          });
+          return;
+        }
+        if (failTool) {
+          // 失败工具：tool_done success:false → 卡片自动展开（失败观察路径）。
+          const failCallId = "call_fail_001";
+          emitAgent({ type: "tool_start", name: "run_command", call_id: failCallId });
+          await sleep(200);
+          emitAgent({
+            type: "tool_done",
+            name: "run_command",
+            call_id: failCallId,
+            success: false,
+            summary: "安装失败：网络连接被拒绝（ECONNREFUSED）",
+          });
+          emitAgent({ type: "token", text: "安装失败" });
+          emitAgent({
+            type: "done",
+            response: "安装失败，请检查网络后重试。",
+            iterations: 1,
+            input_tokens: 900,
+            output_tokens: 20,
+            context_tokens: 1200,
             context_limit: 64_000,
           });
           return;
@@ -1185,12 +1217,29 @@ export async function mockTauri(page: Page, opts: MockTauriOptions = {}) {
               }
               return `PromptStdio 连接成功 · ${p?.api_base || config.api_base} · 套件列表可读（本页 1 条）`;
             }
+            case "set_window_title": {
+              const internals = (window as unknown as { __TAURI_INTERNALS__: Record<string, unknown> })
+                .__TAURI_INTERNALS__;
+              internals.lastWindowTitle = typeof args?.title === "string" ? args.title : "";
+              return null;
+            }
+            case "fetch_announce":
+              if (announceOn) {
+                return {
+                  id: "mock-announce-1",
+                  title: "Stitch 0.2.3 已发布",
+                  body: "修复滚动控制与失败卡折叠；新增侧栏分割线拖动。",
+                  url: "https://www.promptstdio.com/stitch",
+                };
+              }
+              return null;
             case "check_update":
               if (haveUpdate) {
                 return {
                   available: true,
                   current_version: "0.1.2",
                   latest_version: "0.1.3",
+                  release_notes: "修复若干问题；新增启动更新提醒。",
                 };
               }
               return {
@@ -1367,6 +1416,8 @@ export async function mockTauri(page: Page, opts: MockTauriOptions = {}) {
       testPromptstdioFail,
       isMember,
       updateAvailable,
+      streamFailTool: failTool,
+      announceAvailable: announceOn,
     },
   );
 }
