@@ -107,8 +107,20 @@ async fn run_command(cli: Cli) -> anyhow::Result<()> {
                 deny.push(d.clone());
             }
         }
+        // --dangerously-skip-permissions 安全门（Claude Code 语义）：
+        // 默认不可用，须 --allow-dangerously-skip-permissions 显式解锁
+        let effective_mode = if cli.dangerously_skip_permissions {
+            if !cli.allow_dangerously_skip_permissions {
+                anyhow::bail!(
+                    "--dangerously-skip-permissions 默认禁用：须 --allow-dangerously-skip-permissions 显式解锁（防误用）"
+                );
+            }
+            Some("bypass")
+        } else {
+            session_mode
+        };
         permission::apply_from_cli(
-            session_mode,
+            effective_mode,
             settings
                 .permission_mode
                 .as_deref()
@@ -723,6 +735,37 @@ async fn cmd_run(
     });
 
     let allow_rules = allow::AllowRules::load();
+
+    // --permission-mode plan 的单次任务（run / -p）语义（Claude Code 对齐）：
+    // 只产出计划、不执行——非交互无法批准，输出即结果
+    if crate::permission::current().mode == crate::permission::PermissionMode::Plan {
+        let plan =
+            crate::agent::plan::generate_plan(&session, &cfg.llm_api_base, &model, api_key).await?;
+        if plan.is_empty() {
+            anyhow::bail!("模型未产出可执行计划，请重试或换模型");
+        }
+        match format {
+            cli::OutputFormat::Text => {
+                println!("{}", plan.format());
+            }
+            _ => {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "type": "plan",
+                        "title": plan.title,
+                        "steps": plan
+                            .steps
+                            .iter()
+                            .map(|s| s.description.clone())
+                            .collect::<Vec<_>>(),
+                    }))?
+                );
+            }
+        }
+        return Ok(());
+    }
+
     let result = match format {
         cli::OutputFormat::Text => {
             eprintln!("---- stitch ({model}) ----");

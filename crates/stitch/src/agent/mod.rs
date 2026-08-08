@@ -116,7 +116,11 @@ pub enum AgentEvent {
     /// Plan mode: plan was rejected by the user.
     PlanRejected,
     /// Plan mode: starting a step in the plan.
-    PlanStepStart { index: usize, description: String },
+    PlanStepStart {
+        index: usize,
+        total: usize,
+        description: String,
+    },
     /// Plan mode: a step has been completed.
     PlanStepDone { index: usize, description: String },
     /// Token / context usage update (each ReAct iteration + final).
@@ -180,6 +184,11 @@ pub trait ReactRenderer {
     fn on_event(&mut self, ev: AgentEvent);
     /// 确认门：返回是否放行工具执行。
     async fn confirm_tool(&mut self, tool: &str, call_id: &str, message: &str) -> bool;
+    /// 计划批准门（Plan 模式）：返回是否批准执行计划。默认批准
+    /// （run/非交互路径不触发；交互路径覆写）。
+    async fn confirm_plan(&mut self, _plan: &plan::Plan) -> bool {
+        true
+    }
     /// 取消检查（CLI 恒 false；桌面读 cancel_flag）。
     fn is_cancelled(&self) -> bool;
     /// 回合中落盘（桌面 TurnFlusher；CLI 无操作）。
@@ -268,6 +277,16 @@ impl ReactRenderer for CliRenderer {
     async fn confirm_tool(&mut self, _tool: &str, _call_id: &str, message: &str) -> bool {
         crate::render::dialog::confirm(message)
     }
+    async fn confirm_plan(&mut self, plan: &plan::Plan) -> bool {
+        if self.skip_confirm {
+            return true;
+        }
+        println!(
+            "\n\x1b[1;36m计划（批准后逐步执行）\x1b[0m\n{}",
+            plan.format()
+        );
+        crate::render::dialog::confirm("批准计划并开始执行？")
+    }
     fn is_cancelled(&self) -> bool {
         false
     }
@@ -323,6 +342,26 @@ impl<'a> ReactRenderer for DesktopRenderer<'a> {
                 {
                     let mut guard = self.confirm_pending.lock().expect("confirm mutex poisoned");
                     guard.remove(&confirm_id);
+                }
+                false
+            }
+        }
+    }
+    async fn confirm_plan(&mut self, _plan: &plan::Plan) -> bool {
+        // PlanProposed 事件已由 run_plan_turn 发出（UI 据此渲染 + 回传）
+        let (tx, rx) = tokio::sync::oneshot::channel::<bool>();
+        {
+            let mut guard = self.confirm_pending.lock().expect("confirm mutex poisoned");
+            guard.insert("plan-approve".into(), tx);
+        }
+        match tokio::time::timeout(std::time::Duration::from_secs(120), rx).await {
+            Ok(Ok(true)) => true,
+            Ok(Ok(false)) | Ok(Err(_)) => false,
+            Err(_elapsed) => {
+                tracing::warn!("plan approval timed out");
+                {
+                    let mut guard = self.confirm_pending.lock().expect("confirm mutex poisoned");
+                    guard.remove("plan-approve");
                 }
                 false
             }
@@ -546,6 +585,28 @@ pub(crate) async fn run_react_core<R: ReactRenderer>(
                     };
                     let failed = tool_call_failed(&result);
                     tool_errors += usize::from(failed);
+                    if failed {
+                        // PostToolUseFailure hook：工具失败后（通知型，Claude Code 语义）
+                        let hooks = crate::hooks::HookRegistry::load(work_dir);
+                        if hooks.has(crate::hooks::HookEvent::PostToolUseFailure) {
+                            let err = result
+                                .get("error")
+                                .and_then(|e| e.as_str())
+                                .unwrap_or("tool failed");
+                            hooks
+                                .run(
+                                    crate::hooks::HookEvent::PostToolUseFailure,
+                                    work_dir.unwrap_or(""),
+                                    &serde_json::json!({
+                                        "tool_input": tc.arguments,
+                                        "tool_response": result,
+                                        "error": err,
+                                    }),
+                                    Some(&tc.name),
+                                )
+                                .await;
+                        }
+                    }
                     let result_str = serde_json::to_string(&result).unwrap_or_default();
                     let summary = truncate_output(&result_str);
                     // Benchmark metrics ride along structured (not just inside
@@ -935,6 +996,169 @@ pub async fn run_react_streaming(
     .await
 }
 
+/// Plan 模式回合（Claude Code plan mode 语义）：
+/// 生成计划 → 呈现批准 → 批准后按 step 逐回合执行 → 收尾总结。
+/// 计划为空时退化为直接执行；执行阶段临时切 AcceptEdits（批准视为授权），
+/// 结束后恢复原权限模式。
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn run_plan_turn<R: ReactRenderer>(
+    session: &mut Session,
+    api_base: &str,
+    model: &str,
+    api_key: &str,
+    tools: &ToolRegistry,
+    max_iterations: usize,
+    work_dir: Option<&str>,
+    renderer: &mut R,
+) -> anyhow::Result<AgentResult> {
+    let plan = crate::agent::plan::generate_plan(session, api_base, model, api_key).await?;
+    if plan.is_empty() {
+        tracing::info!("plan generation empty; falling back to direct execution");
+        return run_react_core(
+            session,
+            api_base,
+            model,
+            api_key,
+            tools,
+            max_iterations,
+            work_dir,
+            renderer,
+        )
+        .await;
+    }
+
+    // 呈现计划并等待批准（ConfirmRequest 同构：事件 → UI 回传）
+    renderer.on_event(AgentEvent::PlanProposed {
+        id: "plan-approve".into(),
+        plan: plan.clone(),
+    });
+    if !renderer.confirm_plan(&plan).await {
+        renderer.on_event(AgentEvent::PlanRejected);
+        let result = make_result(
+            "计划未获批准，未执行任何改动。".into(),
+            0,
+            &tokens::TokenUsage::default(),
+            session,
+            model,
+            0,
+        );
+        return Ok(result);
+    }
+    renderer.on_event(AgentEvent::PlanApproved);
+
+    // 执行阶段临时切 AcceptEdits（计划批准 = 用户授权执行）
+    let saved = crate::permission::current();
+    let mut exec = saved.clone();
+    exec.mode = crate::permission::PermissionMode::AcceptEdits;
+    crate::permission::set_config(exec);
+
+    let mut tool_errors = 0usize;
+    let mut iterations = 0usize;
+    let total = plan.steps.len();
+    let mut final_result = make_result(
+        String::new(),
+        0,
+        &tokens::TokenUsage::default(),
+        session,
+        model,
+        0,
+    );
+    let outcome = async {
+        for (i, step) in plan.steps.iter().enumerate() {
+            if renderer.is_cancelled() {
+                break;
+            }
+            renderer.on_event(AgentEvent::PlanStepStart {
+                index: i,
+                total,
+                description: step.description.clone(),
+            });
+            session.add_user_message(plan::step_execution_prompt(i, total, &step.description));
+            let r = run_react_core(
+                session,
+                api_base,
+                model,
+                api_key,
+                tools,
+                max_iterations,
+                work_dir,
+                renderer,
+            )
+            .await?;
+            renderer.on_event(AgentEvent::PlanStepDone {
+                index: i,
+                description: step.description.clone(),
+            });
+            iterations += r.iterations;
+            tool_errors += r.tool_errors;
+            final_result = r;
+        }
+        // 收尾总结回合
+        session.add_user_message(plan::plan_summary_prompt());
+        let summary = run_react_core(
+            session,
+            api_base,
+            model,
+            api_key,
+            tools,
+            max_iterations,
+            work_dir,
+            renderer,
+        )
+        .await?;
+        iterations += summary.iterations;
+        tool_errors += summary.tool_errors;
+        final_result = summary;
+        Ok::<(), anyhow::Error>(())
+    }
+    .await;
+
+    crate::permission::set_config(saved);
+    outcome?;
+    final_result.iterations = iterations;
+    final_result.tool_errors = tool_errors;
+    Ok(final_result)
+}
+
+/// Plan 模式回合的 DesktopRenderer 包装（与 `run_react_streaming` 同签名，
+/// 交互/桌面入口用它构造私有 renderer）。
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn run_plan_turn_streaming(
+    session: &mut Session,
+    api_base: &str,
+    model: &str,
+    api_key: &str,
+    tools: &ToolRegistry,
+    max_iterations: usize,
+    confirm_pending: Arc<
+        std::sync::Mutex<std::collections::HashMap<String, tokio::sync::oneshot::Sender<bool>>>,
+    >,
+    work_dir: Option<&str>,
+    allow_rules: std::sync::Arc<std::sync::Mutex<crate::allow::AllowRules>>,
+    event_tx: &tokio::sync::mpsc::UnboundedSender<AgentEvent>,
+    cancel_flag: &std::sync::atomic::AtomicBool,
+    flusher: Option<&std::sync::Arc<std::sync::Mutex<persist::TurnFlusher>>>,
+) -> anyhow::Result<AgentResult> {
+    let mut renderer = DesktopRenderer {
+        confirm_pending: &confirm_pending,
+        allow_rules: &allow_rules,
+        event_tx,
+        cancel_flag,
+        flusher,
+    };
+    run_plan_turn(
+        session,
+        api_base,
+        model,
+        api_key,
+        tools,
+        max_iterations,
+        work_dir,
+        &mut renderer,
+    )
+    .await
+}
+
 fn make_result(
     response: String,
     iterations: usize,
@@ -1310,6 +1534,19 @@ Allow?",
             ),
             None => tool.confirm_message(&exec_args),
         };
+        // PermissionRequest hook：确认请求发出前（通知型——接程序化审批/
+        // 审计日志；不改变批准决策，Claude Code 语义）
+        let hooks = crate::hooks::HookRegistry::load(work_dir);
+        if hooks.has(crate::hooks::HookEvent::PermissionRequest) {
+            hooks
+                .run(
+                    crate::hooks::HookEvent::PermissionRequest,
+                    work_dir.unwrap_or(""),
+                    &serde_json::json!({ "message": desc }),
+                    Some(&tc.name),
+                )
+                .await;
+        }
         if !renderer.confirm_tool(&tc.name, &tc.id, &desc).await {
             return serde_json::json!({
                 "cancelled": true,

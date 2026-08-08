@@ -69,9 +69,16 @@ pub struct HooksFile {
     /// PreCompact——压缩前拦截（block 可拒绝压缩）。
     #[serde(rename = "PreCompact", default)]
     pub pre_compact: Vec<HookSpec>,
+    /// PostToolUseFailure——工具调用失败后（通知型；matcher 匹配工具名）。
+    #[serde(rename = "PostToolUseFailure", default)]
+    pub post_tool_use_failure: Vec<HookSpec>,
+    /// PermissionRequest——权限确认请求发出前（通知型；matcher 匹配工具名，
+    /// 可接程序化审批/审计日志，不改变批准决策）。
+    #[serde(rename = "PermissionRequest", default)]
+    pub permission_request: Vec<HookSpec>,
 }
 
-/// Hook 事件（九个，与 Claude Code 对齐）。
+/// Hook 事件（十一个，与 Claude Code 对齐）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HookEvent {
     PreToolUse,
@@ -83,6 +90,8 @@ pub enum HookEvent {
     Notification,
     SubagentStop,
     PreCompact,
+    PostToolUseFailure,
+    PermissionRequest,
 }
 
 impl HookEvent {
@@ -97,6 +106,8 @@ impl HookEvent {
             HookEvent::Notification => "Notification",
             HookEvent::SubagentStop => "SubagentStop",
             HookEvent::PreCompact => "PreCompact",
+            HookEvent::PostToolUseFailure => "PostToolUseFailure",
+            HookEvent::PermissionRequest => "PermissionRequest",
         }
     }
 
@@ -111,6 +122,8 @@ impl HookEvent {
             HookEvent::Notification => &file.notification,
             HookEvent::SubagentStop => &file.subagent_stop,
             HookEvent::PreCompact => &file.pre_compact,
+            HookEvent::PostToolUseFailure => &file.post_tool_use_failure,
+            HookEvent::PermissionRequest => &file.permission_request,
         }
     }
 
@@ -127,7 +140,13 @@ impl HookEvent {
 
     /// 按工具名匹配（matcher 仅对工具事件有意义）。
     fn is_tool_event(&self) -> bool {
-        matches!(self, HookEvent::PreToolUse | HookEvent::PostToolUse)
+        matches!(
+            self,
+            HookEvent::PreToolUse
+                | HookEvent::PostToolUse
+                | HookEvent::PostToolUseFailure
+                | HookEvent::PermissionRequest
+        )
     }
 }
 
@@ -260,6 +279,8 @@ pub fn summarize(global: &HooksFile, workspace: Option<&HooksFile>) -> String {
         HookEvent::Notification,
         HookEvent::SubagentStop,
         HookEvent::PreCompact,
+        HookEvent::PostToolUseFailure,
+        HookEvent::PermissionRequest,
     ];
     let mut out = String::new();
     for ev in events {
@@ -300,6 +321,16 @@ fn event_input(
             obj["tool_name"] = Value::String(matcher_ctx.unwrap_or("").to_string());
             obj["tool_input"] = input.get("tool_input").cloned().unwrap_or(Value::Null);
             obj["tool_response"] = input.get("tool_response").cloned().unwrap_or(Value::Null);
+        }
+        HookEvent::PostToolUseFailure => {
+            obj["tool_name"] = Value::String(matcher_ctx.unwrap_or("").to_string());
+            obj["tool_input"] = input.get("tool_input").cloned().unwrap_or(Value::Null);
+            obj["tool_response"] = input.get("tool_response").cloned().unwrap_or(Value::Null);
+            obj["error"] = input.get("error").cloned().unwrap_or(Value::Null);
+        }
+        HookEvent::PermissionRequest => {
+            obj["tool_name"] = Value::String(matcher_ctx.unwrap_or("").to_string());
+            obj["message"] = input.get("message").cloned().unwrap_or(Value::Null);
         }
         HookEvent::Stop => {
             obj["stop_hook_active"] = Value::Bool(true);

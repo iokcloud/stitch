@@ -110,6 +110,17 @@ pub struct Cli {
     /// （同 id 覆盖 config.toml 配置，不落盘）。
     #[arg(long, global = true, value_name = "FILE")]
     pub mcp_config: Option<std::path::PathBuf>,
+
+    /// 跳过全部权限确认（Claude Code --dangerously-skip-permissions 语义）：
+    /// 等价 bypass 模式；默认不可用，须 --allow-dangerously-skip-permissions
+    /// 显式解锁（安全门，防 CI 脚本误传后无保护执行）。
+    #[arg(long, global = true)]
+    pub dangerously_skip_permissions: bool,
+
+    /// 解锁 --dangerously-skip-permissions（Claude Code 语义：默认禁用，
+    /// 仅明确选择时放行）。
+    #[arg(long, global = true)]
+    pub allow_dangerously_skip_permissions: bool,
 }
 
 #[derive(Subcommand)]
@@ -160,7 +171,9 @@ pub enum Command {
         model: Option<String>,
 
         /// Skip confirmation prompts for file writes and commands
-        #[arg(short = 'y', long = "dangerously-skip-permissions")]
+        /// （短名 -y 向后兼容；长名由全局 --dangerously-skip-permissions 接管，
+        /// 需 --allow-dangerously-skip-permissions 解锁）
+        #[arg(short = 'y')]
         yes: bool,
     },
 

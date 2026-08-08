@@ -48,7 +48,7 @@ enum SlashAction {
     Permissions(Vec<String>),
     Rewind,
     Agents,
-    Config,
+    Config(String),
     Mcp(String),
     Hooks,
     Upgrade,
@@ -66,6 +66,7 @@ enum SlashAction {
     Think(Vec<String>),
     Init,
     Skill(Vec<String>),
+    Plan(Vec<String>),
     Help,
     /// 自定义 slash 命令（.claude/commands/*.md）：(命令名, 参数)
     Custom(String, String),
@@ -95,6 +96,7 @@ const SLASH_HELP: &str = r#"
   /mcp list                List all configured MCP servers
   /hooks                   Show active hooks (global + workspace)
   /config                  Show current configuration summary
+  /config <键>=<值>         Set a config value in-session (e.g. /config max_iterations=20)
   /profile [id]            Switch saved LLM configs (interactive picker)
   /upgrade                 Check for updates and upgrade in place
   /review                  Review uncommitted git changes (bug / security / omissions)
@@ -112,6 +114,7 @@ const SLASH_HELP: &str = r#"
   /statusline [clear|set]  Show / configure the status line (interactive picker)
   /search <关键词>          Search all sessions' history for a keyword
   /think [on|off]          Show the model's thinking process (default off)
+  /plan [on|off|描述]       Plan mode: draft a plan, review & approve, then execute step by step
   /init                    Create a CLAUDE.md project memory file (does not overwrite)
   Tab                      Complete slash commands / file names
   单独一行 {                Multi-line input (end with a line of just })
@@ -142,7 +145,7 @@ fn parse_slash(line: &str) -> SlashAction {
         "/agents" => SlashAction::Agents,
         "/mcp" => SlashAction::Mcp(rest),
         "/hooks" => SlashAction::Hooks,
-        "/config" => SlashAction::Config,
+        "/config" => SlashAction::Config(rest),
         "/profile" => SlashAction::Profile(rest.split_whitespace().map(str::to_string).collect()),
         "/upgrade" => SlashAction::Upgrade,
         "/review" => SlashAction::Review,
@@ -162,6 +165,7 @@ fn parse_slash(line: &str) -> SlashAction {
         "/think" => SlashAction::Think(rest.split_whitespace().map(str::to_string).collect()),
         "/init" => SlashAction::Init,
         "/skill" => SlashAction::Skill(rest.split_whitespace().map(str::to_string).collect()),
+        "/plan" => SlashAction::Plan(rest.split_whitespace().map(str::to_string).collect()),
         _ => {
             let name = cmd.trim_start_matches('/');
             if name.is_empty() {
@@ -210,6 +214,7 @@ const BUILTIN_SLASHES: &[&str] = &[
     "/search",
     "/init",
     "/skill",
+    "/plan",
 ];
 
 /// rustyline 补全器：`/` 前缀补全 slash 命令（内置 + 自定义），
@@ -951,6 +956,9 @@ pub async fn run_chat(
     let mut last_failed: Option<String> = None;
     // 草稿模式（/draft）：文件改动只预览不落盘（回合结束自动回滚）
     let mut draft_mode = false;
+    // Plan 模式（/plan）：先规划 → 交互批准 → 逐步执行（Claude Code 语义）；
+    // 与 /permissions mode plan 等效（两入口都触发规划回合）
+    let mut plan_mode = false;
     // 当前激活的 Skill 名（/skill <名称> 加载，off 清除）
     let mut active_skill: Option<String> = None;
 
@@ -1180,6 +1188,35 @@ pub async fn run_chat(
                                 if draft_mode { "开启" } else { "关闭" }
                             );
                             continue;
+                        }
+                        SlashAction::Plan(args) => {
+                            let switch = args.first().map(String::as_str);
+                            match switch {
+                                Some("on") => {
+                                    plan_mode = true;
+                                    println!("  [plan] 规划模式已开启——每回合先出计划，批准后执行");
+                                    continue;
+                                }
+                                Some("off") => {
+                                    plan_mode = false;
+                                    println!("  [plan] 规划模式已关闭");
+                                    continue;
+                                }
+                                Some(desc) => {
+                                    // /plan <描述>：开启规划模式并立即以描述为任务
+                                    plan_mode = true;
+                                    println!("  [plan] 规划模式已开启——先出计划，批准后执行");
+                                    line = desc.to_string();
+                                }
+                                None => {
+                                    plan_mode = !plan_mode;
+                                    println!(
+                                        "  [plan] 规划模式已{}",
+                                        if plan_mode { "开启" } else { "关闭" }
+                                    );
+                                    continue;
+                                }
+                            }
                         }
                         SlashAction::Todo(args) => {
                             if args.first().map(String::as_str) == Some("clear") {
@@ -1688,7 +1725,34 @@ pub async fn run_chat(
                             );
                             println!("{}", crate::hooks::summarize(global, Some(ws)));
                         }
-                        SlashAction::Config => {
+                        SlashAction::Config(arg) => {
+                            // /config key=value 带内改设置（Claude Code 2.1.181+ 语义）
+                            if let Some(eq) = arg.find('=') {
+                                let (key, value) = (arg[..eq].trim(), arg[eq + 1..].trim());
+                                if key.is_empty() {
+                                    println!(
+                                        "[用法] /config <键>=<值>（如 /config max_iterations=20）"
+                                    );
+                                    continue;
+                                }
+                                match cfg.set(key, value) {
+                                    Ok(()) => {
+                                        if let Err(e) = cfg.save() {
+                                            println!("[保存失败] {e}");
+                                        } else if key == "llm_api_key" || key == "api_token" {
+                                            println!("[已设置] {key} = ****");
+                                        } else {
+                                            println!("[已设置] {key} = {value}");
+                                        }
+                                    }
+                                    Err(e) => println!("[设置失败] {e}"),
+                                }
+                                continue;
+                            }
+                            if !arg.is_empty() {
+                                println!("[用法] /config <键>=<值>；无参数显示当前配置");
+                                continue;
+                            }
                             let pc = crate::permission::current();
                             let mode = pc.mode.as_str();
                             let hooks_dir = crate::config::config_dir();
@@ -2158,8 +2222,12 @@ pub async fn run_chat(
                 } else {
                     &format!(" · {output_style}")
                 };
+                // Plan 模式：/plan 开关或权限模式 plan（两入口等效）
+                let plan_active = plan_mode
+                    || crate::permission::current().mode == crate::permission::PermissionMode::Plan;
+                let plan_hint = if plan_active { " · plan" } else { "" };
                 println!(
-                    "\x1b[90m╭─ 回合 {turn_count} · {model}{last_hint}{draft_hint}{style_hint}\x1b[0m"
+                    "\x1b[90m╭─ 回合 {turn_count} · {model}{last_hint}{draft_hint}{style_hint}{plan_hint}\x1b[0m"
                 );
                 println!(
                     "
@@ -2181,21 +2249,41 @@ pub async fn run_chat(
                     let model = model.clone();
                     let work_dir = work_dir.clone();
                     async move {
-                        let result = agent::run_react_streaming(
-                            &mut session,
-                            &api_base,
-                            &model,
-                            &api_key,
-                            &tools,
-                            max_iterations,
-                            confirm_pending,
-                            Some(&work_dir),
-                            allow_rules,
-                            &event_tx,
-                            &cancel_flag,
-                            None,
-                        )
-                        .await;
+                        let result = if plan_active {
+                            // Plan 模式：规划 → 批准 → 逐步执行（run_plan_turn
+                            // 内部复用 run_react_core；确认走同一 oneshot 通道）
+                            agent::run_plan_turn_streaming(
+                                &mut session,
+                                &api_base,
+                                &model,
+                                &api_key,
+                                &tools,
+                                max_iterations,
+                                confirm_pending,
+                                Some(&work_dir),
+                                allow_rules,
+                                &event_tx,
+                                &cancel_flag,
+                                None,
+                            )
+                            .await
+                        } else {
+                            agent::run_react_streaming(
+                                &mut session,
+                                &api_base,
+                                &model,
+                                &api_key,
+                                &tools,
+                                max_iterations,
+                                confirm_pending,
+                                Some(&work_dir),
+                                allow_rules,
+                                &event_tx,
+                                &cancel_flag,
+                                None,
+                            )
+                            .await
+                        };
                         (result, session)
                     }
                 });
@@ -2245,6 +2333,24 @@ pub async fn run_chat(
                                     if let Some(tx) = confirm_pending.lock().ok().and_then(|mut m| m.remove(&id)) {
                                         let _ = tx.send(allow);
                                     }
+                                }
+                                AgentEvent::PlanProposed { id, plan } => {
+                                    // 计划渲染 + 终端确认；结果经同一 oneshot 通道回传
+                                    // （run_plan_turn 的 confirm_plan 在另一端等待）
+                                    println!("\n\x1b[1;36m计划（批准后逐步执行）\x1b[0m\n{}", plan.format());
+                                    let allow = crate::render::dialog::confirm("批准计划并开始执行？");
+                                    if let Some(tx) = confirm_pending.lock().ok().and_then(|mut m| m.remove(&id)) {
+                                        let _ = tx.send(allow);
+                                    }
+                                }
+                                AgentEvent::PlanApproved => {
+                                    println!("\x1b[1;36m计划已批准，开始逐步执行\x1b[0m");
+                                }
+                                AgentEvent::PlanRejected => {
+                                    println!("\x1b[90m计划未获批准，未执行任何改动\x1b[0m");
+                                }
+                                AgentEvent::PlanStepStart { index, total, description } => {
+                                    println!("\n\x1b[1;33m步骤 {}/{}：{}\x1b[0m", index + 1, total, description);
                                 }
                                 AgentEvent::ToolStart { name, .. } => {
                                     step_count += 1;
@@ -3038,7 +3144,16 @@ mod tests {
             SlashAction::Mcp(rest) if rest == "add demo --url http://localhost:8080"
         ));
         assert!(matches!(parse_slash("/hooks"), SlashAction::Hooks));
-        assert!(matches!(parse_slash("/config"), SlashAction::Config));
+        assert!(matches!(parse_slash("/config"), SlashAction::Config(_)));
+        // /config key=value 带内改设置
+        match parse_slash("/config max_iterations=20") {
+            SlashAction::Config(a) => assert_eq!(a, "max_iterations=20"),
+            _ => panic!("expected Config(arg)"),
+        }
+        match parse_slash("/config model=deepseek-v4-flash") {
+            SlashAction::Config(a) => assert_eq!(a, "model=deepseek-v4-flash"),
+            _ => panic!("expected Config(arg)"),
+        }
         match parse_slash("/export out.md") {
             SlashAction::Export(Some(p)) => assert_eq!(p, "out.md"),
             other => panic!("expected Export(Some), got {other:?}"),
@@ -3113,6 +3228,19 @@ mod tests {
         match parse_slash("/skill off") {
             SlashAction::Skill(args) => assert_eq!(args, ["off"]),
             other => panic!("expected Skill(off), got {other:?}"),
+        }
+        assert!(matches!(parse_slash("/plan"), SlashAction::Plan(args) if args.is_empty()));
+        match parse_slash("/plan on") {
+            SlashAction::Plan(args) => assert_eq!(args, ["on"]),
+            other => panic!("expected Plan(on), got {other:?}"),
+        }
+        match parse_slash("/plan off") {
+            SlashAction::Plan(args) => assert_eq!(args, ["off"]),
+            other => panic!("expected Plan(off), got {other:?}"),
+        }
+        match parse_slash("/plan 修一下登录页的报错") {
+            SlashAction::Plan(args) => assert_eq!(args, ["修一下登录页的报错"]),
+            other => panic!("expected Plan(描述), got {other:?}"),
         }
         // 非 slash 行不该走到这里（调用方先判断 starts_with('/')）
     }
